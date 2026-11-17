@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">轻窗</string>
+    <string name="quick_label">小窗</string>
+    <string name="service_desc">在屏幕左下角和右下角各放一块感应区，向上滑动呼出应用轮盘。只用于绘制悬浮界面，不读取屏幕内容。</string>
+    <string name="shortcut_open_wheel_short">打开轮盘</string>
+    <string name="shortcut_open_wheel_long">呼出轮盘启动器</string>
+    <string name="app_picker_title">选择应用</string>
+</resources>

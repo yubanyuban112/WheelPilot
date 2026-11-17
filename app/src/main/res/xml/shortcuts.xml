@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+        注册为系统快捷方式后，荣耀 AI 键的「快捷方式」列表里就能选到它。
+        intent 的 action 与 MainActivity 里的检测保持一致。
+    -->
+    <shortcut
+        android:enabled="true"
+        android:icon="@android:drawable/ic_menu_compass"
+        android:shortcutDisabledMessage="@string/shortcut_open_wheel_short"
+        android:shortcutId="open_wheel"
+        android:shortcutLongLabel="@string/shortcut_open_wheel_long"
+        android:shortcutShortLabel="@string/shortcut_open_wheel_short">
+        <intent
+            android:action="com.pilot.wheel.OPEN_WHEEL"
+            android:targetClass="com.pilot.wheel.MainActivity"
+            android:targetPackage="com.pilot.wheel" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+</shortcuts>

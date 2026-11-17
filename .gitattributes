@@ -1,0 +1,14 @@
+# 统一换行，避免 Windows 检出后 gradlew 无法在 Unix 执行
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制
+*.jar binary
+*.png binary
+*.jpg binary
+*.webp binary
+*.apk binary
+
+# 生成文件不参与 diff
+gradle/wrapper/gradle-wrapper.jar binary

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  新拟物前景：「轻窗」主题图标。
+  同色 #E0E5EC 本体 + 左上白光晕 / 右下 #B8BCC2 软影（多层叠加模拟柔光），
+  中央紫色 #6D5DFC 细线窗框 + 中梃，呼应「轻窗」与全应用 accent。
+  内容控制在 108 视口中心安全区内。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 右下软影：本体 (32,32,44,44) 偏移 +2.5 外圈再偏移 +4、更淡，模拟柔光扩散 -->
+    <path
+        android:fillColor="#2AB8BCC2"
+        android:pathData="M49,36 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z" />
+    <path
+        android:fillColor="#50B8BCC2"
+        android:pathData="M47,34.5 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z" />
+
+    <!-- 左上白光晕：偏移 -2.5，外圈 -4 更淡 -->
+    <path
+        android:fillColor="#2EFFFFFF"
+        android:pathData="M41.5,28 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z" />
+    <path
+        android:fillColor="#55FFFFFF"
+        android:pathData="M43,29.5 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z" />
+
+    <!-- 本体：同色凸起方圆 (32,32)-(76,76) r13.5 -->
+    <path
+        android:fillColor="#E0E5EC"
+        android:pathData="M45.5,32 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z" />
+
+    <!-- 紫色窗框 (39,39)-(69,69) r8 -->
+    <path
+        android:strokeColor="#6D5DFC"
+        android:strokeWidth="3.5"
+        android:pathData="M47,39 h14 a8,8 0 0 1 8,8 v14 a8,8 0 0 1 -8,8 h-14 a8,8 0 0 1 -8,-8 v-14 a8,8 0 0 1 8,-8 z" />
+    <!-- 中梃：把窗分成左右两扇 -->
+    <path
+        android:strokeColor="#6D5DFC"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M54,39.5 v29" />
+</vector>
