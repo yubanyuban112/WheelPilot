@@ -108,7 +108,9 @@ internal fun loadInstalledPackageNames(context: Context): Set<String> {
         .toSet()
 }
 
-// 代码去重 + 提速：带图标的应用列表在一个进程内只解析一次，切页不再重复加载
+// 代码去重 + 提速：带图标的应用列表在一个进程内只解析一次，切页不再重复加载。
+// volatile：解析已移到 IO 线程，主线程读缓存需要可见性保证。
+@Volatile
 internal var cachedLaunchableApps: List<AppEntry>? = null
 
 internal fun launchableApps(context: Context): List<AppEntry> =

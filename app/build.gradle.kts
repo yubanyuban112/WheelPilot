@@ -21,6 +21,8 @@ android {
     namespace = "com.pilot.wheel"
     // priv-kit 0.21.0 的 AAR 要求 compileSdk >= 37
     compileSdk = 37
+    // 固定 NDK 版本，探测项 1 的 native_input_probe.so 依赖
+    ndkVersion = "26.3.11579264"
 
     signingConfigs {
         if (hasSigningKey) {
@@ -42,8 +44,8 @@ android {
         minSdk = 30
         // targetSdk 保持 35，避免 Android 17 的新运行时行为影响特权服务
         targetSdk = 35
-        versionCode = 68
-        versionName = "3.9.1"
+        versionCode = 132
+        versionName = "3.24.23"
 
         // 瘦身：真机只需 arm 两种 ABI，去掉 x86 / x86_64 模拟器的 so
         ndk {
@@ -68,6 +70,19 @@ android {
     buildFeatures {
         compose = true
         aidl = true
+    }
+
+    // 探测项 1：native 直读 /dev/input 的 .so（见 app/src/main/cpp/）
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    lint {
+        // BlockedPrivateApi 已在 lint.xml 里按文件抑制（见 shell/AtmCli.java 的运行环境说明）
+        lintConfig = file("lint.xml")
     }
 
     compileOptions {

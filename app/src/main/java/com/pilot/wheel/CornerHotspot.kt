@@ -6,15 +6,18 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Build
 import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.WindowInsets
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
 import com.pilot.wheel.core.SwipeDetector
+import com.pilot.wheel.core.physicalBounds
 
 /**
  * 角落感应区。手势判定规则：
@@ -23,6 +26,11 @@ import com.pilot.wheel.core.SwipeDetector
  *  - 小把手轻点 / 长按：呼出轮盘（备选交互）；
  *  - 普通点击：开启穿透时，临时把窗口设成 NOT_TOUCHABLE，把这一下点击注入给下层应用；
  *  - 其它手势（斜划、短距离划动等）：同样穿透给下层，而不是被热区吞掉。
+ *
+ * 40 号改动：上滑达到阈值后进入「跟手」模式——触摸事件流绑死在收到 DOWN 的窗口，
+ * 轮盘 overlay 中途 addView 抢不到这段手势，所以唤出全程由本 View 驱动：
+ * 每次 MOVE 把「手指位移进度 + 屏幕坐标」喂给轮盘（onSwipeMove），
+ * UP/CANCEL 时交给 onSwipeEnd / onSwipeCancel 收尾。
  *
  * 这样"热区穿透"和"上滑呼出"可以同时成立，不再需要靠 API 34 的
  * onMotionEvent 全局观察，也不需要单独的小把手窗口。
@@ -35,6 +43,14 @@ class CornerHotspot(
     private val showHandle: Boolean,
     private val passThrough: Boolean,
     private val onSwipe: () -> Unit,
+    /** 上滑达到阈值：返回 true 表示已进入跟手模式（后续 MOVE/UP 由本类持续喂给轮盘） */
+    private val onSwipeActivate: () -> Boolean = { false },
+    /** 跟手模式下的每次移动：progress ∈ [0,1] 为手指位移进度，(x,y) 为屏幕坐标 */
+    private val onSwipeMove: (progress: Float, x: Float, y: Float) -> Unit = { _, _, _ -> },
+    /** 跟手模式松手：(x,y) 为抬起点屏幕坐标，由轮盘判定启动/展开 */
+    private val onSwipeEnd: (x: Float, y: Float) -> Unit = { _, _ -> },
+    /** 跟手模式被系统打断 / 多指：取消唤出 */
+    private val onSwipeCancel: () -> Unit = {},
     private val onTapThrough: (x: Float, y: Float) -> Unit,
     /** 整段轨迹（屏幕坐标）+ 时长，交给下层按真实路径注入，避免只投直线的失真 */
     private val onGesturePassThrough: (path: List<Pair<Float, Float>>, durationMs: Long) -> Unit,
@@ -48,6 +64,8 @@ class CornerHotspot(
         private const val FLASH_MS = 2200L
         private const val PATH_STEP_DP = 6f
         private const val MAX_PATH_POINTS = 120
+        /** 跟手滑出总行程：手指从起滑点累计移动这么多距离，轮盘完全展开 */
+        private const val FOLLOW_TRAVEL_DP = 170f
     }
 
     private val density = resources.displayMetrics.density
@@ -57,6 +75,8 @@ class CornerHotspot(
 
     private var armed = false
     private var activated = false
+    /** 达到阈值后 onSwipeActivate 返回 true：本次手势由跟手链路接管 */
+    private var followStream = false
     private var multiTouch = false
     private var longPressTriggered = false
     private var downLocalX = 0f
@@ -69,6 +89,8 @@ class CornerHotspot(
     private var flashUntil = 0L
     /** 穿透注入期间暂时让出系统手势排除区，避免下层收不到边缘手势 */
     private var exclusionSuspended = false
+    /** 键盘在屏让位中：不接收触摸（窗口标志由 Service 设置），也不画把手 */
+    private var imeYielded = false
     /** 本次手势的采样轨迹（屏幕坐标），用于还原曲线而非直线 */
     private val gesturePath = ArrayList<Pair<Float, Float>>(MAX_PATH_POINTS)
     private val location = IntArray(2)
@@ -109,12 +131,22 @@ class CornerHotspot(
         isClickable = true
         isFocusable = false
         setWillNotDraw(false)
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        // 维度2：NO_HIDE_DESCENDANTS 连子树一起从节点树摘除（NO 只排除自身）。
+        // 已确认 AccessibilityServiceInfo 未开 flagIncludeNotImportantViews，不会被抵消，
+        // 因此这里对本服务自己的读屏/节点读取同样生效——热区控件不再污染 rootInActiveWindow。
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        // 维度2（API 34+ 增强）：把覆盖层标记为无障碍数据敏感，从所有无障碍服务摘出。
+        // 与 NO_HIDE_DESCENDANTS 是叠加关系；API < 34 时上者是等价兜底。
+        if (Build.VERSION.SDK_INT >= 34) {
+            setAccessibilityDataSensitive(ACCESSIBILITY_DATA_SENSITIVE_YES)
+        }
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         applyGestureExclusion(width, height)
+        // 系统手势 inset 常在 attach 后一帧才上报，下一帧用真实值重算一次
+        post { applyGestureExclusion(width, height) }
     }
 
     override fun onDetachedFromWindow() {
@@ -129,27 +161,64 @@ class CornerHotspot(
         layoutHandle()
     }
 
-    /** 底部系统返回手势很容易吃掉角落上滑，这里显式声明排除区 */
+    /**
+     * 维度3：排除区只覆盖「窗口内不与系统手势带重叠」的部分。
+     * 旧实现整窗 Rect(0,0,w,h) 抢排，热区一旦压到系统返回手势带就会吞掉系统返回。
+     * 现按 WindowInsets.Type.systemGestures() 的 bottom inset 裁剪：
+     * 系统带内让给系统（短滑返回），带外保留排除区（长滑上滑呼出热区），二者共存。
+     * ROM 未上报 inset 时退化为整窗排除（旧行为），不引入回归。
+     */
     private fun applyGestureExclusion(w: Int, h: Int) {
-        if (w <= 0 || h <= 0) return
-        if (exclusionSuspended) return
-        runCatching { systemGestureExclusionRects = listOf(Rect(0, 0, w, h)) }
+        if (w <= 0 || h <= 0 || exclusionSuspended) return
+        runCatching {
+            val gestureBottom = rootWindowInsets
+                ?.getInsets(WindowInsets.Type.systemGestures())?.bottom ?: 0
+            // 55 号：排除区的底边同样按物理显示算——本视图贴的是物理底边，
+            // 用 displayMetrics.heightPixels 会少算导航条那一段，排除区整体偏上。
+            val screenH = runCatching {
+                val wm = context.getSystemService(android.view.WindowManager::class.java)
+                val dm = resources.displayMetrics
+                wm.physicalBounds(dm.widthPixels, dm.heightPixels).bottom
+            }.getOrDefault(resources.displayMetrics.heightPixels)
+            val loc = IntArray(2)
+            getLocationOnScreen(loc)
+            // 排除区底边（窗口本地坐标）不得超过系统手势带顶边
+            val bottom = if (gestureBottom > 0) {
+                (screenH - gestureBottom - loc[1]).coerceIn(0, h)
+            } else {
+                h
+            }
+            systemGestureExclusionRects =
+                if (bottom > 0) listOf(Rect(0, 0, w, bottom)) else emptyList()
+        }.onFailure {
+            // 任何 ROM 差异都退回旧行为，绝不因排除区异常破坏热区触发
+            runCatching { systemGestureExclusionRects = listOf(Rect(0, 0, w, h)) }
+        }
     }
 
-    /** 穿透注入时调用：让出排除区；结束后恢复 */
+    /** 穿透注入时调用：让出排除区；结束后按系统手势带重算恢复 */
     fun setExclusionSuspended(suspended: Boolean) {
         if (exclusionSuspended == suspended) return
         exclusionSuspended = suspended
-        runCatching {
-            systemGestureExclusionRects = if (suspended) emptyList() else listOf(Rect(0, 0, width, height))
+        if (suspended) {
+            runCatching { systemGestureExclusionRects = emptyList() }
+        } else {
+            applyGestureExclusion(width, height)
         }
     }
 
     private fun layoutHandle() {
-        // 把手 22×58dp，距底 80dp，左右距边 4dp
+        // 把手 22×58dp，距底 80dp，左右距边 4dp。
+        // 窗口高由设置滑杆控制（最低 16dp）：旧算法在 h≤28dp 时 bottom=min(h-14, y+58)≤y，
+        // RectF 高 ≤0 —— drawHandle 只查 width 画不出任何东西，handleContains 恒 false，
+        // 轻点/长按把手呼出静默失效。这里保证把手至少 16dp 高（极端小窗贴底边也不归零）。
         val x = if (left) dp(4f) else width - dp(4f) - dp(22f)
         val y = max(height - dp(80f), dp(4f))
-        handleRect.set(x, y, x + dp(22f), min(height - dp(14f), y + dp(58f)))
+        val bottom = min(
+            height.toFloat(),
+            max(min(height - dp(14f), y + dp(58f)), y + dp(16f)),
+        )
+        handleRect.set(x, y, x + dp(22f), max(bottom, y + dp(1f)))
     }
 
     private fun handleContains(x: Float, y: Float): Boolean {
@@ -157,6 +226,18 @@ class CornerHotspot(
         val pad = dp(5f)
         return x >= handleRect.left - pad && x <= handleRect.right + pad &&
             y >= handleRect.top - pad && y <= handleRect.bottom + pad
+    }
+
+    /**
+     * 键盘在屏时让位：窗口由 Service 设成 FLAG_NOT_TOUCHABLE（触摸直达输入法），
+     * 这里同步把把手与闪烁提示一起隐藏 —— 否则键盘上会盖着一个小方块，
+     * 用户会以为那里还能点。
+     */
+    fun setImeYielded(yielded: Boolean) {
+        if (imeYielded == yielded) return
+        imeYielded = yielded
+        if (yielded) flashUntil = 0L
+        invalidate()
     }
 
     /** 供「显示热区」使用：蓝色闪烁提示，2.2 秒后自动淡出 */
@@ -168,6 +249,7 @@ class CornerHotspot(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (imeYielded) return
         drawFlash(canvas)
         drawHandle(canvas)
     }
@@ -186,7 +268,7 @@ class CornerHotspot(
     }
 
     private fun drawHandle(canvas: Canvas) {
-        if (!showHandle || handleRect.width() <= 0) return
+        if (!showHandle || handleRect.width() <= 0 || handleRect.height() <= 0) return
         canvas.drawRoundRect(handleRect, dp(11f), dp(11f), handleFill)
         canvas.drawRoundRect(handleRect, dp(11f), dp(11f), handleStroke)
         val cx = (handleRect.left + handleRect.right) / 2f
@@ -209,9 +291,15 @@ class CornerHotspot(
     private fun cancelInternal(notify: Boolean) {
         removeCallbacks(longPressRunnable)
         val wasActivated = activated
+        val wasFollowing = followStream
         armed = false
         activated = false
-        if (notify && wasActivated) onSwipe()
+        followStream = false
+        if (notify && wasFollowing) {
+            onSwipeCancel()
+        } else if (notify && wasActivated) {
+            onSwipe()
+        }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -258,13 +346,27 @@ class CornerHotspot(
         val dist = hypot(dx, dy)
         if (!activated) {
             if (dist > tapTolerance) removeCallbacks(longPressRunnable)
-            if (SwipeDetector.shouldActivate(left, touchSlop, dx, dy, dist)) {
+            // thresholdPx（22dp）此前只赋值不参与判定：真实门槛退化成 touchSlop*1.15 ≈ 9dp，
+            // 在微信看视频/小说时手指稍往上带就被判成「呼出」，应用自己的上滑收不到。
+            if (SwipeDetector.shouldActivate(left, touchSlop, dx, dy, dist, thresholdPx)) {
                 activated = true
                 removeCallbacks(longPressRunnable)
                 // 滑动达到呼出阈值的瞬间给一个更明显的双脉冲震动（触发区专用波形）
                 if (Prefs.haptic(context)) Haptics.open(context)
+                // 40 号：阈值一到就建轮盘进跟手模式，此后手指拖多远轮盘出多少
+                followStream = onSwipeActivate()
+                if (followStream) sendFollowMove()
             }
+        } else if (followStream) {
+            sendFollowMove()
         }
+    }
+
+    /** 跟手进度 = 手指距起滑点的直线距离 / 总行程（170dp 滑满） */
+    private fun sendFollowMove() {
+        val dist = hypot(lastX - downX, lastY - downY)
+        val progress = min(1f, dist / (FOLLOW_TRAVEL_DP * density))
+        onSwipeMove(progress, lastX, lastY)
     }
 
     /** 按距离采样轨迹（最多 MAX_PATH_POINTS 个点），还原曲线而非直线 */
@@ -282,10 +384,20 @@ class CornerHotspot(
         val endY = screenY(event)
         val duration = event.eventTime - downTime
         val wasActivated = activated
+        val wasFollowing = followStream
         armed = false
         activated = false
+        followStream = false
         if (wasActivated) {
-            onSwipe()
+            if (wasFollowing && multiTouch) {
+                // 跟手途中多指按下：按取消处理，避免抬起时误启动图标
+                onSwipeCancel()
+            } else if (wasFollowing) {
+                // 松手点交给轮盘：落在图标上 → 直接启动；否则轮盘原地展开
+                onSwipeEnd(endX, endY)
+            } else {
+                onSwipe()
+            }
             return
         }
 
@@ -311,11 +423,12 @@ class CornerHotspot(
             return
         }
 
-        // 划动但没达到呼出阈值（含多指）：交给下层，而不是白白吞掉
-        if (passThrough) {
-            appendGesturePath(endX, endY)
-            onGesturePassThrough(gesturePath.toList(), duration)
-        }
+        // 划动但没达到呼出阈值（含多指、反向划、横向划）：一律交回下层。
+        // 之前只有开着「点击穿透」才透传，关着时这段手势直接消失 ——
+        // 在微信视频/阅读器里就是「滑了一下没反应」。点击仍受穿透开关控制，
+        // 因为点击是「要不要把这一下交给应用」的语义选择，而划动本来就是应用的。
+        appendGesturePath(endX, endY)
+        onGesturePassThrough(gesturePath.toList(), duration)
     }
 
     private fun appendGesturePath(endX: Float, endY: Float) {
@@ -326,7 +439,10 @@ class CornerHotspot(
 
     private fun onActionCancel() {
         removeCallbacks(longPressRunnable)
+        val wasFollowing = followStream
         armed = false
         activated = false
+        followStream = false
+        if (wasFollowing) onSwipeCancel()
     }
 }

@@ -30,15 +30,18 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -50,6 +53,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
@@ -92,10 +97,19 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -103,6 +117,24 @@ import priv.kit.ui.PrivilegeScaffold
 
 
 // 应用页：已选轮盘 + 全部应用列表 + 拖拽排序
+
+/**
+ * 应用列表异步加载：图标解码（loadIcon → toBitmap → 轮廓检测）放到 IO 线程。
+ *
+ * 主线程同步解析上百个图标是切页掉帧的直接原因；缓存命中时零等待返回，
+ * 未命中先给空列表，几十到几百毫秒后自动填充，不再阻塞首帧。
+ */
+@Composable
+internal fun rememberLaunchableApps(context: Context): List<AppEntry> {
+    val cached = remember { cachedLaunchableApps }
+    var apps by remember { mutableStateOf<List<AppEntry>>(cached ?: emptyList()) }
+    LaunchedEffect(Unit) {
+        if (cached == null) {
+            apps = withContext(Dispatchers.IO) { launchableApps(context) }
+        }
+    }
+    return apps
+}
 
 @Composable
 internal fun AppsTab(
@@ -112,13 +144,15 @@ internal fun AppsTab(
     onToggleTool: (String) -> Unit,
 ) {
     val context = LocalContext.current
-    val apps = remember { launchableApps(context) }
+    val apps = rememberLaunchableApps(context)
 
     // 对齐同类小窗应用：搜索 120ms 防抖、系统应用开关、首次默认填充
     var query by remember { mutableStateOf("") }
     var debounced by remember { mutableStateOf("") }
     var showSystem by remember { mutableStateOf(Prefs.showSystemApps(context)) }
     var pendingRemove by remember { mutableStateOf<AppEntry?>(null) }
+    // 子分页：0=应用（轮盘定位 + 全部应用），1=快捷工具（独立成页）
+    var subTab by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(query) {
         delay(120)
@@ -136,7 +170,8 @@ internal fun AppsTab(
                 icon = tool.icon?.asImageBitmap(),
                 letter = "#",
                 system = false,
-                contour = QuickTools.ICON_CONTOUR,
+                // 轮廓取自与「更多」面板同一处的 visual()，工具在三处页面才会是同一个形状
+                contour = QuickTools.contourOf(context, key) ?: QuickTools.ICON_CONTOUR,
             )
         }
     }
@@ -145,19 +180,21 @@ internal fun AppsTab(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 16.dp),
+            // 63 号：搜索聚焦弹出输入法时，把列表整体顶上去，避免键盘遮住最后的搜索结果
+            .imePadding()
+            .padding(horizontal = UiSpace.l),
     ) {
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(UiSpace.s))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "应用",
                 style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.SemiBold,
                 color = UiTokens.Ink,
                 modifier = Modifier.weight(1f),
             )
             Text(
-                "${selected.size}/${Prefs.MAX_APPS}",
+                "${selected.size}/${Prefs.slots(context)}",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary,
             )
@@ -166,10 +203,104 @@ internal fun AppsTab(
             "长按拖动，调整轮盘顺序",
             style = MaterialTheme.typography.bodySmall,
             color = UiTokens.InkSub,
-            modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
+            modifier = Modifier.padding(top = UiSpace.xxs, bottom = UiSpace.s),
         )
 
-        LazyColumn(modifier = Modifier.weight(1f)) {
+        // 子分页：应用 / 快捷工具。工具从原应用列表抽出，独立成页更好找
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = UiSpace.s),
+            horizontalArrangement = Arrangement.spacedBy(UiSpace.s),
+        ) {
+            NeuChip(text = "应用", selected = subTab == 0) { subTab = 0 }
+            NeuChip(text = "快捷工具", selected = subTab == 1) { subTab = 1 }
+        }
+
+        if (subTab == 1) {
+            // 工具子页：先给「轮盘固定定位」，再给工具网格。
+            // 之前只有网格，用户在这里加了工具却看不到它排在第几位、也没法调顺序，
+            // 必须切回「应用」页才能排序 —— 两个子页信息不对称。
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                item(key = "tool_pinned") {
+                    SectionCard(
+                        title = "轮盘固定定位",
+                        subtitle = "长按 0.2 秒拖动排序 · 点一下移除",
+                    ) {
+                        if (pinnedApps.isEmpty()) {
+                            Text(
+                                "点下面的工具，就能放进这个位置",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = UiSpace.xs),
+                            )
+                        } else {
+                            PinnedRow(
+                                apps = pinnedApps,
+                                onTap = { entry -> pendingRemove = entry },
+                                onReorder = onReorder,
+                            )
+                        }
+                    }
+                }
+                item(key = "tool_tip") {
+                    Text(
+                        "点一下工具即放进轮盘，再点一次移出",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = UiTokens.InkSub,
+                        modifier = Modifier.padding(top = UiSpace.s, bottom = UiSpace.xs),
+                    )
+                }
+                // 4 列网格：9 个工具两行多一个，比 3 列少一行、不留大片空槽
+                val toolRows = QuickTools.ALL.chunked(4)
+                items(toolRows.size) { r ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = UiSpace.xxs),
+                        horizontalArrangement = Arrangement.spacedBy(UiSpace.sm),
+                    ) {
+                        toolRows[r].forEach { tool ->
+                            val key = QuickTools.toolKey(tool.id)
+                            ToolCell(
+                                tool = tool,
+                                checked = key in selected,
+                                modifier = Modifier.weight(1f),
+                                onClick = { onToggleTool(key) },
+                            )
+                        }
+                        repeat(4 - toolRows[r].size) { Spacer(modifier = Modifier.weight(1f)) }
+                    }
+                }
+                item(key = "tool_bottom") { Spacer(Modifier.height(UiSpace.l)) }
+            }
+            return@Column
+        }
+
+        // 全部应用：过滤系统应用 + 搜索(label 或 pkg 包含, 大小写不敏感)。
+        // 分组规则与「更多」面板同一套：按预计算首字母 groupBy 后 toSortedMap，
+        // 不是靠数据源顺序「连续同字母归组」——那样一旦数据源排序变了（例如把 # 挪到末尾），
+        // 同一个字母会被切成两组，索引条也就对不上位置了。
+        val q = debounced.trim().lowercase()
+        val filtered = apps.filter { app ->
+            (showSystem || !app.system) &&
+                (q.isEmpty() ||
+                    app.label.lowercase().contains(q) ||
+                    app.pkg.lowercase().contains(q))
+        }
+        val grouped = filtered.groupBy { it.letter }.toSortedMap()
+        val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+        val scope = rememberCoroutineScope()
+        // 38 号改动（B1）→ 39 号更正（B1b）：索引条定宽 28dp + 右缘内缩 2dp，
+        // 避让区取 28dp 保证最宽字母（W）的完整字形在避让区内
+        val showIndexBar = q.isEmpty() && grouped.isNotEmpty()
+
+        // 列表 + 右侧 A-Z 索引（索引条叠在列表上，不占布局宽度）
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(end = if (showIndexBar) 28.dp else 0.dp),
+            state = listState,
+        ) {
             // 轮盘固定定位放最上面：这是最常调整的东西，不该被工具区挤到下面
             item(key = "pinned") {
                 SectionCard(title = "轮盘固定定位", subtitle = "长按 0.2 秒拖动排序 · 点一下移除") {
@@ -178,7 +309,7 @@ internal fun AppsTab(
                             "点下面的应用，就能放进这个位置",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 10.dp),
+                            modifier = Modifier.padding(vertical = UiSpace.ms),
                         )
                     } else {
                         PinnedRow(
@@ -190,63 +321,18 @@ internal fun AppsTab(
                 }
             }
 
-            // 快捷工具：折叠成一行，横向滚动，不占纵向空间
-            item(key = "quick_tools") {
-                Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 6.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "快捷工具",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = UiTokens.Ink,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            "点一下放进轮盘",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = UiTokens.InkSub,
-                        )
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    LazyRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 2.dp),
-                    ) {
-                        items(QuickTools.ALL, key = { it.id }) { tool ->
-                            val key = QuickTools.toolKey(tool.id)
-                            ToolCell(
-                                tool = tool,
-                                checked = key in selected,
-                                onClick = { onToggleTool(key) },
-                            )
-                        }
-                    }
-                }
-            }
-
-            // 全部应用：过滤系统应用 + 搜索(label 或 pkg 包含, 大小写不敏感)
-            val q = debounced.trim().lowercase()
-            val filtered = apps.filter { app ->
-                (showSystem || !app.system) &&
-                    (q.isEmpty() ||
-                        app.label.lowercase().contains(q) ||
-                        app.pkg.lowercase().contains(q))
-            }
+            // 快捷工具已独立到「快捷工具」子页，应用页不再重复占据列表空间
 
             item(key = "search") {
                 SearchField(value = query, onValueChange = { query = it })
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(UiSpace.s))
             }
 
             item(key = "all_header") {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 14.dp, bottom = 6.dp),
+                        .padding(top = UiSpace.ml, bottom = UiSpace.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     SectionLabel(
@@ -259,7 +345,7 @@ internal fun AppsTab(
                         style = MaterialTheme.typography.labelMedium,
                         color = UiTokens.InkSub,
                     )
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(UiSpace.sm))
                     NeuSwitch(
                         checked = showSystem,
                         onCheckedChange = {
@@ -276,34 +362,27 @@ internal fun AppsTab(
                         "没有匹配的应用",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 16.dp),
+                        modifier = Modifier.padding(vertical = UiSpace.l),
                     )
                 }
             }
 
-            // 按首字母分组（数据源已排好序，连续同字母归组）
-            var i = 0
-            while (i < filtered.size) {
-                val letter = filtered[i].letter
-                val group = mutableListOf<AppEntry>()
-                while (i < filtered.size && filtered[i].letter == letter) {
-                    group += filtered[i]
-                    i++
-                }
+            // 按首字母分组（键已按字母升序，与更多面板一致）
+            grouped.forEach { (letter, list) ->
                 item(key = "head_$letter") {
                     SectionLabel(
                         letter,
                         color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                        modifier = Modifier.padding(top = UiSpace.m, bottom = UiSpace.xs),
                     )
                 }
                 // 3 列网格（对齐图三）：图标 + 名称居中，空槽补位避免末行拉伸
-                val rows = group.chunked(3)
+                val rows = list.chunked(3)
                 items(rows.size) { r ->
                     // 格子间留出间隙，避免相邻新拟物阴影相互重叠成脏边
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = UiSpace.xs),
+                        horizontalArrangement = Arrangement.spacedBy(UiSpace.sm),
                     ) {
                         rows[r].forEach { app ->
                             AppCell(
@@ -317,7 +396,37 @@ internal fun AppsTab(
                     }
                 }
             }
+            // 底部余量：索引条与网格在同一块区域，末行不贴边
+            item(key = "apps_bottom") { Spacer(Modifier.height(UiSpace.l)) }
         }
+
+        // 右侧 A-Z 快捷索引：与「更多」面板同一套交互 —— 点按或上下拖动，
+        // 滚到对应字母分组（分组头的 key 规则同为 head_$letter）。
+        if (showIndexBar) {
+            val letters = grouped.keys.toList()
+            // 精确推算每个分组头在 LazyColumn 里的 item 序号：
+            // 固定前置 3 项（pinned / search / all_header）+ 每组 1 个头 + ceil(n/3) 行
+            var runningIndex = 3
+            val headerIndexByLetter = linkedMapOf<String, Int>()
+            letters.forEach { letter ->
+                headerIndexByLetter[letter] = runningIndex
+                val count = grouped[letter]?.size ?: 0
+                runningIndex += 1 + (count + 2) / 3
+            }
+            // 38 号改动（B1）：摆位收进单源组件 AlphabetIndexOverlay（贴右缘、纵向撑满列表区），
+            // 不再是 240dp 居中带悬在屏幕中部压住右列图标
+            AlphabetIndexOverlay(
+                letters = letters,
+                onLetterSelected = { letter ->
+                    // 优先用已渲染 item 的真实序号，避免推算与实际不一致
+                    val pos = listState.layoutInfo.visibleItemsInfo
+                        .firstOrNull { it.key == "head_$letter" }?.index
+                    val target = pos ?: headerIndexByLetter[letter] ?: 0
+                    scope.launch { listState.animateScrollToItem(target) }
+                },
+            )
+        }
+        } // Box（列表 + 右侧索引）
     }
 
     // 确认删除弹框（对齐 confirmRemove）
@@ -327,14 +436,16 @@ internal fun AppsTab(
             containerColor = UiTokens.DialogSurface,
             title = { Text("从轮盘移除？") },
             text = { Text("${entry.label} 会从固定位里消失，随时可以再加回来。") },
+            // 37 号改动（T13/C2）：删除确认弹窗与同角色弹窗统一走 NeuButton 主题按钮体系，
+            // 不再裸用 M3 TextButton（未着主题强调色，外观/行为与其他弹窗不一致）
             confirmButton = {
-                TextButton(onClick = {
+                NeuButton(text = "移除", primary = true) {
                     onToggle(entry)
                     pendingRemove = null
-                }) { Text("移除") }
+                }
             },
             dismissButton = {
-                TextButton(onClick = { pendingRemove = null }) { Text("取消") }
+                NeuButton(text = "取消") { pendingRemove = null }
             },
         )
     }
@@ -348,8 +459,8 @@ internal fun SectionCard(
     content: @Composable () -> Unit,
 ) {
     // 面板已浮起，内部完全平铺：不用阴影、不用凹槽，只靠间距与标题分层
-    Box(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    Box(modifier = Modifier.fillMaxWidth().padding(top = UiSpace.s)) {
+        Column(modifier = Modifier.padding(UiSpace.l)) {
             Text(
                 title,
                 style = MaterialTheme.typography.titleMedium,
@@ -360,9 +471,9 @@ internal fun SectionCard(
                 subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = UiTokens.InkSub,
-                modifier = Modifier.padding(top = 2.dp),
+                modifier = Modifier.padding(top = UiSpace.xxs),
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(UiSpace.m))
             content()
         }
     }
@@ -381,12 +492,18 @@ internal fun AppCell(
     val shape = remember(app.pkg, app.contour) { iconShape(app.contour) }
     Column(
         modifier = modifier
+            // UI UX Pro Max · Accessibility：应用格补 role=Checkbox + 选中态，
+            // TalkBack 读"微信，复选框，已勾选/未勾选"（勾选态此前只有 ✓ 视觉符号）
+            .semantics(mergeDescendants = true) cell@{
+                role = Role.Checkbox
+                this@cell.selected = checked
+            }
             .neuPressable(RoundedCornerShape(UiTokens.RadiusRow)) {
                 // 勾选切换 = 普通点击，统一 select 手感
                 if (Prefs.haptic(context)) Haptics.select(context)
                 onClick()
             }
-            .padding(vertical = 8.dp),
+            .padding(vertical = UiSpace.s),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box {
@@ -418,21 +535,21 @@ internal fun AppCell(
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .size(18.dp)
+                        .size(UiTokens.IconSm)
                         .clip(androidx.compose.foundation.shape.CircleShape)
                         .background(MaterialTheme.colorScheme.primary),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        "✓",
-                        color = UiTokens.PrimaryOn,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
+                    Icon(
+                        Icons.Filled.Check,
+                        contentDescription = null, // 勾选态已由外层 Checkbox 的 selected 语义表达
+                        tint = UiTokens.PrimaryOn,
+                        modifier = Modifier.size(13.dp),
                     )
                 }
             }
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(UiSpace.xs))
         Text(
             app.label,
             style = MaterialTheme.typography.labelMedium,
@@ -504,6 +621,30 @@ internal fun PinnedRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(cellH * rows)
+                // UI UX Pro Max · Accessibility：拖拽排序的 TalkBack 替代操作。
+                // 长按拖拽对读屏用户不可用，这里为每个已占用槽位生成「前移/后移」动作，
+                // 动作名带应用名，读屏用户可在「自定义操作」里听到并触发。
+                .semantics {
+                    customActions = order.mapIndexed { index, pkg ->
+                        val label = byPkgLookup(apps, pkg)?.label ?: pkg
+                        val move: (Int) -> CustomAccessibilityAction = { delta ->
+                            CustomAccessibilityAction("将${label}${if (delta < 0) "前移" else "后移"}一位") {
+                                val to = index + delta
+                                if (to in order.indices) {
+                                    val moved = order.removeAt(index)
+                                    order.add(to, moved)
+                                    onReorder(order.toList())
+                                    Haptics.tick(context)
+                                }
+                                true
+                            }
+                        }
+                        buildList {
+                            if (index > 0) add(move(-1))
+                            if (index < order.lastIndex) add(move(1))
+                        }
+                    }.flatten()
+                }
                 .pointerInput(order.size) {
                     detectTapGestures { offset ->
                         if (dragIndex >= 0) return@detectTapGestures
@@ -607,7 +748,7 @@ internal fun PinnedRow(
                         },
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(UiSpace.xs))
                     Box(
                         modifier = Modifier
                             .size(48.dp)
@@ -625,7 +766,12 @@ internal fun PinnedRow(
                             },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("+", color = UiTokens.InkSub, style = MaterialTheme.typography.titleLarge)
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = null, // 空槽装饰，无语义
+                            tint = UiTokens.InkSub,
+                            modifier = Modifier.size(UiTokens.IconMd),
+                        )
                     }
                 }
             }
@@ -643,7 +789,7 @@ private fun PinnedCell(
     val shape = remember(app.pkg, app.contour) { iconShape(app.contour) }
     val plate = remember(app.pkg, app.contour) { iconPlateShape(app.contour, 42.dp, 5.dp) }
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(UiSpace.xs))
         Box(
             modifier = Modifier
                 .size(52.dp)
@@ -678,7 +824,7 @@ private fun PinnedCell(
                 )
             }
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(UiSpace.xs))
         Text(
             app.label,
             style = MaterialTheme.typography.labelMedium,
@@ -705,13 +851,20 @@ private fun ToolCell(
     onClick: () -> Unit,
 ) {
     val context = LocalContext.current
-    val bitmap = remember(tool.id) { QuickTools.icon(context, tool).asImageBitmap() }
-    // 底座与图标裁剪共用同一个形状，且形状取自工具图标自己的圆角
-    val shape = remember(tool.id) { iconShape(QuickTools.ICON_CONTOUR) }
+    // 图标与轮廓统一走 QuickTools.visual()：与「更多」面板工具卡、轮盘是同一份数据
+    val visual = remember(tool.id) { QuickTools.visual(context, tool) }
+    val bitmap = remember(tool.id) { visual.icon.asImageBitmap() }
+    // 底座与图标裁剪共用同一个形状，且形状取自工具实际显示的图标
+    val shape = remember(tool.id) { iconShape(visual.contour) }
     Column(
         modifier = modifier
-            .width(64.dp)
+            // 宽度交给外层 weight 决定（4 列网格），不再写死 64dp
             .clip(RoundedCornerShape(UiTokens.RadiusRow))
+            // UI UX Pro Max · Accessibility：工具格补 role=Checkbox + 选中态
+            .semantics(mergeDescendants = true) cell@{
+                role = Role.Checkbox
+                this@cell.selected = checked
+            }
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -719,11 +872,11 @@ private fun ToolCell(
                 if (Prefs.haptic(context)) Haptics.select(context)
                 onClick()
             }
-            .padding(vertical = 6.dp),
+            .padding(vertical = UiSpace.xs),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box {
-            NeuIconBadge(iconSize = 40.dp, shape = shape, contour = QuickTools.ICON_CONTOUR) {
+            NeuIconBadge(iconSize = 40.dp, shape = shape, contour = visual.contour) {
                 Image(
                     bitmap = bitmap,
                     contentDescription = tool.label,
@@ -734,21 +887,21 @@ private fun ToolCell(
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .size(18.dp)
+                        .size(UiTokens.IconSm)
                         .clip(androidx.compose.foundation.shape.CircleShape)
                         .background(MaterialTheme.colorScheme.primary),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        "✓",
-                        color = UiTokens.PrimaryOn,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
+                    Icon(
+                        Icons.Filled.Check,
+                        contentDescription = null, // 勾选态已由外层 Checkbox 的 selected 语义表达
+                        tint = UiTokens.PrimaryOn,
+                        modifier = Modifier.size(13.dp),
                     )
                 }
             }
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(UiSpace.xs))
         Text(
             tool.short,
             style = MaterialTheme.typography.labelMedium,

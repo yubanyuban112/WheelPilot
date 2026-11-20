@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import android.os.Bundle
 import android.content.pm.ApplicationInfo
 import android.provider.Settings
@@ -21,6 +22,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -38,10 +40,13 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -88,6 +93,10 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color as GlassColor
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
@@ -113,6 +122,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ThemeController.load(this)
+
+        // Android 10+ 会给「透明系统栏」自动叠一层对比度 scrim：浅色背景下就是
+        // 导航条上方那条看不出是谁画的细白线。本应用自己铺满画布与底栏，
+        // 不需要系统再补一层，这里显式关掉（targetSdk 35 强制 edge-to-edge 后尤其明显）。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+            window.isStatusBarContrastEnforced = false
+        }
 
         // AI 键、桌面长按快捷方式、系统快捷方式唤起时走这三个 action 之一。
         // 只借这个入口把轮盘拉起来，随即关掉自己，用户看到的就只有轮盘。
@@ -138,7 +156,7 @@ class MainActivity : ComponentActivity() {
                                 .fillMaxSize()
                                 .background(UiTokens.Canvas)
                                 .systemBarsPadding()
-                                .padding(12.dp),
+                                .padding(UiSpace.m),
                         ) {
                             Box(
                                 modifier = Modifier
@@ -166,11 +184,11 @@ class MainActivity : ComponentActivity() {
                                             onSurfaceVariant = UiTokens.InkSub,
                                         ),
                                         shapes = androidx.compose.material3.Shapes(
-                                            extraSmall = RoundedCornerShape(10.dp),
-                                            small = RoundedCornerShape(14.dp),
-                                            medium = RoundedCornerShape(18.dp),
-                                            large = RoundedCornerShape(22.dp),
-                                            extraLarge = RoundedCornerShape(24.dp),
+                                            extraSmall = RoundedCornerShape(UiTokens.RadiusIcon),
+                                            small = RoundedCornerShape(UiTokens.RadiusRow),
+                                            medium = RoundedCornerShape(UiTokens.RadiusField),
+                                            large = RoundedCornerShape(UiTokens.RadiusCard),
+                                            extraLarge = RoundedCornerShape(UiTokens.RadiusPanel),
                                         ),
                                     ) {
                                         PrivilegeScaffold(viewModel = viewModel<PilotPrivilegeViewModel>())
@@ -216,6 +234,8 @@ private fun MainTabs(onOpenPrivilege: () -> Unit) {
     var tab by remember { mutableStateOf(0) }
     var selected by remember { mutableStateOf(Prefs.load(context)) }
     var accessible by remember { mutableStateOf(isAccessibilityEnabled(context)) }
+    // 从小窗页轮盘卡片跳转设置页时，指定要展开的分组（用完即清）
+    var pendingSettingsGroup by remember { mutableStateOf<String?>(null) }
     // 启动提速：默认填充只需判断包名是否存在，用轻量查询，不加载任何图标
     val installedPkgs = remember { loadInstalledPackageNames(context) }
 
@@ -228,8 +248,8 @@ private fun MainTabs(onOpenPrivilege: () -> Unit) {
             Prefs.save(context, selected)
             Toast.makeText(context, "已从轮盘移除「${entry.label}」", Toast.LENGTH_SHORT).show()
         } else {
-            if (selected.size >= Prefs.MAX_APPS) {
-                Toast.makeText(context, "轮盘只有 ${Prefs.MAX_APPS} 个位置，先移除一个", Toast.LENGTH_SHORT).show()
+            if (selected.size >= Prefs.slots(context)) {
+                Toast.makeText(context, "轮盘只有 ${Prefs.slots(context)} 个位置，先移除一个", Toast.LENGTH_SHORT).show()
                 return
             }
             selected = selected + pkg
@@ -245,8 +265,8 @@ private fun MainTabs(onOpenPrivilege: () -> Unit) {
             Prefs.save(context, selected)
             Toast.makeText(context, "已从轮盘移除「$label」", Toast.LENGTH_SHORT).show()
         } else {
-            if (selected.size >= Prefs.MAX_APPS) {
-                Toast.makeText(context, "轮盘只有 ${Prefs.MAX_APPS} 个位置，先移除一个", Toast.LENGTH_SHORT).show()
+            if (selected.size >= Prefs.slots(context)) {
+                Toast.makeText(context, "轮盘只有 ${Prefs.slots(context)} 个位置，先移除一个", Toast.LENGTH_SHORT).show()
                 return
             }
             selected = selected + key
@@ -266,20 +286,24 @@ private fun MainTabs(onOpenPrivilege: () -> Unit) {
     }
 
     // 对齐 AppRepo.ensureDefaults：首次进入从常用列表挑已安装应用填充轮盘
-    if (!Prefs.appsInitialized(context) && selected.isEmpty()) {
-        val installed = installedPkgs
-        val favorites = listOf(
-            "com.tencent.mm", "com.eg.android.AlipayGphone",
-            "com.ss.android.ugc.aweme", "tv.danmaku.bili",
-            "com.tencent.mobileqq", "com.xingin.xhs",
-            "com.netease.cloudmusic", "com.sina.weibo",
-        )
-        val defaults = favorites.filter { it in installed }.take(Prefs.MAX_APPS)
-        if (defaults.isNotEmpty()) {
-            Prefs.save(context, defaults)
-            selected = Prefs.load(context)
-        } else {
-            Prefs.setAppsInitialized(context, true)
+    // 37 号改动（S3/4-1）：副作用包进 LaunchedEffect —— 组合期内直写持久层与状态
+    // 未包 side-effect，重组重放时会反复写盘；首帧组合期间也不再出现写盘竞态
+    LaunchedEffect(installedPkgs) {
+        if (!Prefs.appsInitialized(context) && selected.isEmpty()) {
+            val installed = installedPkgs
+            val favorites = listOf(
+                "com.tencent.mm", "com.eg.android.AlipayGphone",
+                "com.ss.android.ugc.aweme", "tv.danmaku.bili",
+                "com.tencent.mobileqq", "com.xingin.xhs",
+                "com.netease.cloudmusic", "com.sina.weibo",
+            )
+            val defaults = favorites.filter { it in installed }.take(Prefs.slots(context))
+            if (defaults.isNotEmpty()) {
+                Prefs.save(context, defaults)
+                selected = Prefs.load(context)
+            } else {
+                Prefs.setAppsInitialized(context, true)
+            }
         }
     }
 
@@ -289,6 +313,7 @@ private fun MainTabs(onOpenPrivilege: () -> Unit) {
         onPauseOrDispose { }
     }
 
+    val motionOn = rememberMotionEnabled()
     Scaffold(
         containerColor = GlassColor.Transparent,
         bottomBar = {
@@ -303,16 +328,22 @@ private fun MainTabs(onOpenPrivilege: () -> Unit) {
                 targetState = tab,
                 transitionSpec = {
                     val dir = if (targetState > initialState) 1 else -1
-                    (fadeIn(animationSpec = tween(260, easing = androidx.compose.animation.core.FastOutSlowInEasing)) +
-                        slideInHorizontally(
-                            animationSpec = spring<IntOffset>(dampingRatio = 1f, stiffness = 350f),
-                            initialOffsetX = { dir * it / 5 },
-                        )) togetherWith
-                        (fadeOut(animationSpec = tween(180, easing = androidx.compose.animation.core.FastOutSlowInEasing)) +
-                            slideOutHorizontally(
-                                animationSpec = tween(180, easing = androidx.compose.animation.core.FastOutSlowInEasing),
-                                targetOffsetX = { -dir * it / 6 },
-                            ))
+                    // UI UX Pro Max · reduced-motion：系统开启减弱动效时退化为瞬时切换，
+                    // 尊重 ANIMATOR_DURATION_SCALE（与 cascadeEnter 行为一致）。
+                    if (!motionOn) {
+                        fadeIn(animationSpec = snap()) togetherWith fadeOut(animationSpec = snap())
+                    } else {
+                        (fadeIn(animationSpec = tween(260, easing = androidx.compose.animation.core.FastOutSlowInEasing)) +
+                            slideInHorizontally(
+                                animationSpec = spring<IntOffset>(dampingRatio = 1f, stiffness = 350f),
+                                initialOffsetX = { dir * it / 5 },
+                            )) togetherWith
+                            (fadeOut(animationSpec = tween(180, easing = androidx.compose.animation.core.FastOutSlowInEasing)) +
+                                slideOutHorizontally(
+                                    animationSpec = tween(180, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+                                    targetOffsetX = { -dir * it / 6 },
+                                ))
+                    }
                 },
                 label = "main-tab",
             ) { currentTab ->
@@ -321,6 +352,10 @@ private fun MainTabs(onOpenPrivilege: () -> Unit) {
                         accessible = accessible,
                         selectedCount = selected.size,
                         onOpenPrivilege = onOpenPrivilege,
+                        onOpenWheelSettings = {
+                            pendingSettingsGroup = "轮盘外观"
+                            tab = 2
+                        },
                     )
                     1 -> AppsTab(
                         selected = selected,
@@ -331,7 +366,10 @@ private fun MainTabs(onOpenPrivilege: () -> Unit) {
                             toggleToolKey(key, label)
                         },
                     )
-                    else -> SettingsScreen(onOpenPrivilege = onOpenPrivilege)
+                    else -> SettingsScreen(
+                        initialGroup = pendingSettingsGroup,
+                        onInitialGroupConsumed = { pendingSettingsGroup = null },
+                    )
                 }
             }
         }
@@ -350,32 +388,48 @@ private val TAB_LABELS = listOf("小窗", "应用", "设置")
 @Composable
 private fun GlassBottomBar(tab: Int, onTab: (Int) -> Unit) {
     val context = LocalContext.current
+    val motionOn = rememberMotionEnabled()
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val cellWidth = maxWidth / TAB_LABELS.size
         // 药丸指示器：目标格随页签变化，弹簧滑动过去
         val pillX by animateDpAsState(
             targetValue = cellWidth * tab,
-            animationSpec = androidx.compose.animation.core.spring<Dp>(
-                dampingRatio = 0.9f,
-                stiffness = Spring.StiffnessMedium,
-            ),
+            animationSpec = if (motionOn) {
+                spring<Dp>(dampingRatio = 0.9f, stiffness = Spring.StiffnessMedium)
+            } else snap(),
             label = "dock-pill",
         )
+        val dockShape = RoundedCornerShape(
+            topStart = UiTokens.RadiusPanel,
+            topEnd = UiTokens.RadiusPanel,
+        )
+        // 底栏按渲染风格分三支，不再「玻璃 or 拟物」二分：
+        //  - LIQUID：glassDock（环境影 / 本体渐变 / 顶沿倒角）+ glassPill；
+        //  - APPLE ：appleDock（磨砂白 + 发丝线 + 极轻影）+ applePill（灰底胶囊）；
+        //  - NEUMORPH（经典拟物 / 新拟物）：neuRaised + neuInset（凹凸语义保留）。
+        // 3.19.0 之前 Apple 落进拟物分支，底栏是一条凸起厚条，与 iOS tab bar 不同语言。
+        // 导航条 inset：底栏材质必须铺到屏幕最底边，图标区仍收在 68dp 内。
+        // targetSdk 35 起系统强制 edge-to-edge，不补这段 inset 的话手势条会直接压在图标上。
+        val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        val style = UiTokens.style
         Column {
-            // 底栏本体：凸起软垫条（顶部圆角），替代原先的同色平面
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .neuRaised(
-                        RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
-                        blur = 14f,
-                        dist = 6f,
+                    .then(
+                        when (style) {
+                            UiRenderStyle.LIQUID -> Modifier.glassDock(dockShape)
+                            UiRenderStyle.APPLE -> Modifier.appleDock(dockShape)
+                            UiRenderStyle.NEUMORPH -> Modifier.neuRaised(dockShape, blur = 14f, dist = 6f)
+                        },
                     )
-                    .height(68.dp),
+                    .height(68.dp + navInset),
             ) {
+              Box(modifier = Modifier.fillMaxWidth().height(68.dp)) {
                 // 滑动药丸：内凹垫包住选中页图标（内凹 = 已激活），弹簧滑动。
                 // 药丸与图标徽标共用圆心：y 6..46 的圆心 26dp == 徽标圆心，
-                // 水平方向按格宽居中，切换时不会出现图标在药丸里偏移的观感
+                // 水平方向按格宽居中，切换时不会出现图标在药丸里偏移的观感。
+                // 玻璃主题没有「内外」之分，选中态改用主色玻璃 + 外发光（glassPill）。
                 Box(
                     modifier = Modifier
                         .offset(
@@ -383,25 +437,40 @@ private fun GlassBottomBar(tab: Int, onTab: (Int) -> Unit) {
                             y = 6.dp,
                         )
                         .size(width = 52.dp, height = 40.dp)
-                        .neuInset(RoundedCornerShape(50), blur = 10f, dist = 5f),
+                        .then(
+                            when (style) {
+                                UiRenderStyle.LIQUID -> Modifier.glassPill(RoundedCornerShape(UiTokens.RadiusPill))
+                                UiRenderStyle.APPLE -> Modifier.applePill(RoundedCornerShape(UiTokens.RadiusPill))
+                                UiRenderStyle.NEUMORPH -> Modifier.neuInset(
+                                    RoundedCornerShape(UiTokens.RadiusPill), blur = 10f, dist = 5f,
+                                )
+                            },
+                        ),
                 )
                 Row(modifier = Modifier.fillMaxSize()) {
                     TAB_LABELS.forEachIndexed { index, label ->
                         val selected = tab == index
+                        val tabInteraction = remember { MutableInteractionSource() }
                         // 选中态颜色柔韧过渡（300ms ease-in-out），不再瞬切
                         val tint by animateColorAsState(
                             targetValue = if (selected) UiTokens.Primary else UiTokens.FieldHint,
-                            animationSpec = GlassMotion.moldingColor(),
+                            animationSpec = if (motionOn) GlassMotion.moldingColor() else snap(),
                             label = "dock-tint",
                         )
                         Column(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()
+                                // UI UX Pro Max · Accessibility：底栏每格补 role=Tab + selected，
+                                // TalkBack 才能朗读"标签、已选中/未选中"（此前是裸 clickable）。
+                                .semantics(mergeDescendants = true) tab@{
+                                    role = Role.Tab
+                                    this@tab.selected = selected
+                                }
                                 // 去掉 Material 默认矩形涟漪（切换时的「方框」），
                                 // 选中态由内凹药丸 + 颜色过渡表达
                                 .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
+                                    interactionSource = tabInteraction,
                                     indication = null,
                                 ) {
                                     if (Prefs.haptic(context)) Haptics.select(context)
@@ -412,13 +481,16 @@ private fun GlassBottomBar(tab: Int, onTab: (Int) -> Unit) {
                             // 固定几何：徽标顶部 9dp、直径 34dp → 圆心 26dp，
                             // 与滑动药丸圆心重合；文字固定悬浮在药丸下方，
                             // 选中/未选中布局完全一致，切换时图标不跳动
-                            Spacer(Modifier.height(9.dp))
-                            // 未选中：凸起软垫圆底上的图标；选中：裸图标坐在内凹药丸里
+                            Spacer(Modifier.height(UiSpace.s))
+                            // 未选中：凸起软垫圆底上的图标；选中：裸图标坐在内凹药丸里。
+                            // 玻璃与 Apple 主题没有「从材质里长出来」这层语义，未选中态保持裸图标
+                            // 63 号：图标按压缩放（Apple 系统级微交互），只动 transform
                             Box(
                                 modifier = Modifier
                                     .size(34.dp)
+                                    .pressFeedback(tabInteraction, scale = 0.88f)
                                     .then(
-                                        if (!selected) {
+                                        if (!selected && style == UiRenderStyle.NEUMORPH) {
                                             Modifier.neuRaised(CircleShape, blur = 8f, dist = 4f)
                                         } else {
                                             Modifier
@@ -433,7 +505,7 @@ private fun GlassBottomBar(tab: Int, onTab: (Int) -> Unit) {
                                     modifier = Modifier.size(if (selected) 24.dp else 20.dp),
                                 )
                             }
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(UiSpace.s))
                             Text(
                                 label,
                                 style = MaterialTheme.typography.labelSmall,
@@ -443,6 +515,7 @@ private fun GlassBottomBar(tab: Int, onTab: (Int) -> Unit) {
                         }
                     }
                 }
+              }
             }
         }
     }

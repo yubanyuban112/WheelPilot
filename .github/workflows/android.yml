@@ -1,0 +1,37 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 单测先跑：纯 JVM 逻辑（几何 / 解析 / 备份编解码），失败就不必继续打 APK
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
+
+      # release 需要签名密钥（local.properties 不入库），CI 只验证 debug 能否构建
+      - name: Assemble debug
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheelpilot-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

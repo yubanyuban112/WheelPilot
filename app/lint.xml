@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!--
+      AtmCli 不在应用进程里跑：它由 app_process 以 shell uid 加载，没有 ApplicationInfo，
+      不受 targetSdk 的 hidden API 限制。lint 只看源码里的反射调用，无法区分运行环境，
+      因此按文件抑制，而不是全局关掉这条检查。
+
+      PilotShellService 同理：它由 Shizuku 以 uid 2000 拉起，同样没有 ApplicationInfo，
+      并在构造时自己补了一次 HiddenApiBypass 豁免。这两处是项目里仅有的「运行在
+      shell 身份下」的代码，按文件抑制的边界正好把范围锁死在这里。
+    -->
+    <issue id="BlockedPrivateApi">
+        <ignore path="src/main/java/com/pilot/wheel/shell/AtmCli.java" />
+        <ignore path="src/main/java/com/pilot/wheel/PilotShellService.kt" />
+    </issue>
+</lint>

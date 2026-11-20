@@ -17,6 +17,7 @@ import android.hardware.camera2.CameraManager
 import android.net.Uri
 import android.os.Build
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import priv.kit.core.Privilege
 
 /**
@@ -68,6 +69,17 @@ object QuickTools {
 
     fun toolIdOf(key: String) = key.removePrefix(TOOL_PREFIX)
 
+    /**
+     * 工具关联的应用包名：用于「更多页」工具卡显示关联应用的真实图标与轮廓。
+     * 系统能力类（截屏/手电/锁屏/打开链接）无关联应用，返回 null，继续用工具字形图标。
+     */
+    fun linkedPackage(toolId: String): String? = when (toolId) {
+        WECHAT_SCAN, WECHAT_PAY -> WECHAT
+        ALIPAY_SCAN, ALIPAY_RECEIPT, ALIPAY_PAY -> ALIPAY
+        UNIONPAY_SCAN, UNIONPAY_PAY -> UNIONPAY
+        else -> null
+    }
+
     // 只保留能真正直达的工具：微信内部页不导出、荣耀识屏不接受注入手势，
     // 这两类已移除，避免点了没反应还占位置。
     val ALL = listOf(
@@ -98,10 +110,38 @@ object QuickTools {
         return PilotApp(
             pkg = key,
             label = tool.short,
-            icon = icon(context, tool),
+            icon = visual(context, tool).icon,
             toolId = tool.id,
         )
     }
+
+    /**
+     * 工具在界面上的统一呈现：图标 + 实测轮廓。
+     *
+     * 判据与「更多」面板的工具卡完全一致 —— 有关联应用的（支付宝/云闪付各入口）
+     * 直接用该应用的真实图标与轮廓，没有关联应用的系统能力类（截屏/手电/锁屏/链接）
+     * 才用品牌色底 + 字形的自绘图标。此前轮盘与应用页一律用自绘图标，
+     * 同一个「支付宝扫一扫」在三个页面显示成两个形状，本次统一到这一处。
+     */
+    data class Visual(val icon: Bitmap, val contour: Float)
+
+    private val visualCache = HashMap<String, Visual>()
+
+    fun visual(context: Context, tool: Tool): Visual = visualCache.getOrPut(tool.id) {
+        val linked = linkedPackage(tool.id)
+        val appBitmap = linked?.let { pkg ->
+            runCatching { context.packageManager.getApplicationIcon(pkg).toBitmap(96, 96) }.getOrNull()
+        }
+        if (appBitmap != null) {
+            Visual(appBitmap, detectIconContour(appBitmap))
+        } else {
+            Visual(icon(context, tool), ICON_CONTOUR)
+        }
+    }
+
+    /** 按轮盘条目键（tool:<id>）取轮廓；非工具键返回 null */
+    fun contourOf(context: Context, key: String): Float? =
+        tool(toolIdOf(key))?.let { visual(context, it).contour }
 
     /** 工具图标的圆角比例（26 / 96），底座与裁剪必须用同一个值，形状才和图标一致 */
     const val ICON_CONTOUR = 26f / 96f
@@ -138,7 +178,8 @@ object QuickTools {
     fun orderedEnabled(context: Context): List<Tool> {
         val enabled = Prefs.toolsEnabled(context).toSet()
         val order = Prefs.toolOrder(context)
-        return order.mapNotNull { byId[it] }.filter { it.id in enabled }
+        return order.mapNotNull { byId[it] }
+            .filter { it.id in enabled }
     }
 
     fun isAvailable(context: Context, id: String): Boolean = when (id) {
@@ -155,7 +196,6 @@ object QuickTools {
     private fun installed(context: Context, pkg: String): Boolean = runCatching {
         context.packageManager.getApplicationInfo(pkg, 0).enabled
     }.getOrDefault(false)
-
     /**
      * 执行工具，返回提示文案（空串表示成功且无需提示）。
      *
@@ -408,7 +448,10 @@ object QuickTools {
         Prefs.toolComponent(context, slot.toolId)?.let { cls ->
             val result = openComponent(context, ComponentName(UNIONPAY, cls), "正在打开云闪付${slot.label}")
             if (result == "正在打开云闪付${slot.label}") return result
-            Prefs.setToolComponent(context, slot.toolId, null)
+            // 37 号改动（S4/4-2）：入口打不开只记录，不再抹掉用户校准数据 ——
+            // openComponent 失败可能是 iAware 静默拦截等临时原因（exit code 仍 0），
+            // 删校准不可逆；候选遍历照旧兑底，校准入口下次仍优先尝试
+            PilotLog.d(context, TAG, "unionpay ${slot.name} calibrated entry failed, keep: $cls")
         }
         for (component in candidates(context, UNIONPAY, slot.keywords, slot.negative)) {
             if (openComponent(context, component, "正在打开云闪付${slot.label}") ==
@@ -431,7 +474,8 @@ object QuickTools {
         Prefs.toolComponent(context, WECHAT_PAY)?.let { cls ->
             val ok = openComponent(context, ComponentName(WECHAT, cls), "正在打开微信收付款")
             if (ok == "正在打开微信收付款") return ok
-            Prefs.setToolComponent(context, WECHAT_PAY, null)
+            // 37 号改动（S4/4-2）：同上，校准数据不再因一次打开失败而被抹掉
+            PilotLog.d(context, TAG, "wechat pay calibrated entry failed, keep: $cls")
         }
         val legacy = ComponentName(WECHAT, "$WECHAT.plugin.offline.ui.WalletOfflineCoinPurseUI")
         if (openComponent(context, legacy, "正在打开微信收付款") == "正在打开微信收付款") {

@@ -41,3 +41,10 @@ desktop.ini
 
 # 代码度量产物
 mid.json
+
+# native 构建缓存
+.cxx/
+
+# 备份文件
+*.bak
+*.bak_*

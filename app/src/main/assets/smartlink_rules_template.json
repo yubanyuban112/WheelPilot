@@ -1,0 +1,51 @@
+{
+  "_readme": {
+    "用途": "轻窗 SmartLink 链接规则的导入模板。复制本文件，改写 rules 数组后导入。",
+    "导入方式": [
+      "① 设置 → 智能链接 → 规则管理 → 从剪贴板导入（JSON 全文复制到剪贴板）",
+      "② 把 .json 文件分享给「轻窗 · 规则导入」",
+      "③ adb shell am start -a com.pilot.wheel.IMPORT_RULES --es json '<JSON>'"
+    ],
+    "合并语义": "按 ruleId 合并：同 id 覆盖旧规则，新 id 追加；不删未提及的规则。",
+    "恢复默认": "设置 → 智能链接 → 规则管理 → 恢复默认规则",
+    "字段": {
+      "ruleId": "必填。规则唯一标识，建议 default-<英文名>；导入时同 id 覆盖。",
+      "domainMatches": "必填（或改用 urlRegex）。域名列表，不带 http:// 与路径。子域自动匹配：写 taobao.com 可匹配 m.taobao.com；写 tb.cn 不会匹配 xtb.cn。",
+      "urlRegex": "可选。填了就只按正则匹配，domainMatches 被忽略。仅用于短链等必须精确锚定的场景。",
+      "displayName": "必填。胶囊上显示的 App 名字。",
+      "targetPackage": "必填。目标 App 包名，必须已安装，否则不会弹胶囊。",
+      "targetActivity": "可选。指定 Activity 类名，一般留空（交给 App 自己的 VIEW 处理）。",
+      "deepLinkScheme": "可选。自定义 scheme 形态的地址，如 snssdk1128://；一般留空。",
+      "urlTransform": "可选。把 {url} 套进模板生成最终地址，如 kwai://webview?url={url}。",
+      "iconSource": "可选。PACKAGE（默认，取 App 图标）或 CUSTOM。",
+      "customIcon": "可选。CUSTOM 时的图标标识，一般留空。",
+      "priority": "可选。同一链接命中多条规则时数字大的胜出，默认 100；子域特化规则建议 110 以上。",
+      "enabled": "可选。false 表示该规则不参与匹配，默认 true。"
+    }
+  },
+  "version": 2,
+  "rules": [
+    {
+      "ruleId": "default-xiaohongshu",
+      "domainMatches": ["xiaohongshu.com", "xhslink.com", "xhs.cn"],
+      "urlRegex": null,
+      "displayName": "小红书",
+      "targetPackage": "com.xingin.xhs",
+      "targetActivity": null,
+      "deepLinkScheme": null,
+      "urlTransform": null,
+      "iconSource": "PACKAGE",
+      "customIcon": null,
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "custom-example-minimal",
+      "domainMatches": ["example.com"],
+      "displayName": "示例站点",
+      "targetPackage": "com.example.app",
+      "priority": 100,
+      "enabled": false
+    }
+  ]
+}

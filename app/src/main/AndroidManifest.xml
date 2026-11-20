@@ -35,19 +35,67 @@
             android:name="android.app.shortcuts"
             android:resource="@xml/shortcuts" />
 
+        <!--
+            主界面本身不再挂 LAUNCHER：桌面入口由下面 4 个 activity-alias 承担，
+            一个主题一个 alias、同一时刻只启用一个，切换主题时换图标。
+            （ThemeIcon.sync 负责启用/停用；MainActivity 仍可被显式 intent 与快捷方式拉起）
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
             <!-- 快捷程序 intent：AI 键、长按图标等外部入口通过它解析 -->
             <intent-filter>
                 <action android:name="com.pilot.wheel.OPEN_WHEEL" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- 桌面入口 · 经典拟物（默认启用，与 UiTheme.CLASSIC 对应） -->
+        <activity-alias
+            android:name=".LauncherClassic"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_classic"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_classic"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- 桌面入口 · 液态玻璃 -->
+        <activity-alias
+            android:name=".LauncherGlass"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_glass"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_glass"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- 桌面入口 · 新拟物（64 号：已并入经典拟物，alias 移除） -->
+
+        <!-- 桌面入口 · Apple 流体 -->
+        <activity-alias
+            android:name=".LauncherApple"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_apple"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_apple"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <!--
             透明入口：给荣耀 AI 键 / 系统快捷方式映射用。
@@ -71,6 +119,43 @@
             android:noHistory="true"
             android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- 轻量打开：场景下用浮窗打开应用的设置页 -->
+        <activity
+            android:name=".LightOpenActivity"
+            android:exported="false"
+            android:label="轻量打开"
+            android:theme="@style/Theme.WheelPilot" />
+
+        <!--
+            SmartLink 规则导入接口（无界面，透明主题）。
+            三个入口：显式 action（adb 脚本）/ 分享 application/json / 打开 content:// json。
+            外部只做合并导入，不提供整体替换，最坏结果可用「恢复默认规则」回退。
+        -->
+        <activity
+            android:name=".RuleImportActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="@string/rule_import_label"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="com.pilot.wheel.IMPORT_RULES" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/json" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/json" />
+                <data android:scheme="content" />
+            </intent-filter>
+        </activity>
 
         <service
             android:name=".PilotService"
@@ -105,6 +190,17 @@
             android:exported="true"
             android:multiprocess="false"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <!-- InputManager.monitorInput 最小可行性验证入口（adb 广播触发，不改业务） -->
+        <receiver
+            android:name=".InputMonitorProbeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.pilot.wheel.INPUT_MONITOR_PROBE" />
+                <action android:name="com.pilot.wheel.PROBE_ALL_TOUCH_CHANNELS" />
+                <action android:name="com.pilot.wheel.PROBE_A11Y_MOTION" />
+            </intent-filter>
+        </receiver>
 
     </application>
 

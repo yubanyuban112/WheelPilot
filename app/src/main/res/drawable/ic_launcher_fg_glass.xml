@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  液态玻璃前景：先铺三团彩色折射光（品红/紫/蓝），再压一块白色渐变半透明玻璃面板，
+  面板上白色高光窗框。窗框是「轻窗」的识别符号，四套图标共用同一几何，只换材质。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 折射光：画在面板之下，透过半透明本体显色 -->
+    <path
+        android:fillColor="#3DFF2D55"
+        android:pathData="M14,34 a20,20 0 1 0 40,0 a20,20 0 1 0 -40,0" />
+    <path
+        android:fillColor="#38A855F7"
+        android:pathData="M50,26 a18,18 0 1 0 36,0 a18,18 0 1 0 -36,0" />
+    <path
+        android:fillColor="#38007AFF"
+        android:pathData="M46,74 a22,22 0 1 0 44,0 a22,22 0 1 0 -44,0" />
+
+    <!-- 玻璃面板本体：竖向渐变，上亮下暗 -->
+    <path android:pathData="M45.5,32 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54"
+                android:startY="32"
+                android:endX="54"
+                android:endY="76"
+                android:startColor="#4DFFFFFF"
+                android:endColor="#14FFFFFF" />
+        </aapt:attr>
+    </path>
+
+    <!-- 玻璃倒角：整圈细边，上亮下弱 -->
+    <path
+        android:strokeColor="#8CFFFFFF"
+        android:strokeWidth="1.4"
+        android:pathData="M45.5,32 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z" />
+
+    <!-- 窗框 + 中梃 -->
+    <path
+        android:strokeColor="#F2FFFFFF"
+        android:strokeWidth="3.5"
+        android:pathData="M47,39 h14 a8,8 0 0 1 8,8 v14 a8,8 0 0 1 -8,8 h-14 a8,8 0 0 1 -8,-8 v-14 a8,8 0 0 1 8,-8 z" />
+    <path
+        android:strokeColor="#F2FFFFFF"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M54,39.5 v29" />
+</vector>

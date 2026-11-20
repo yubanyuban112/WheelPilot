@@ -1,0 +1,347 @@
+{
+  "version": 2,
+  "rules": [
+    {
+      "ruleId": "default-xiaohongshu",
+      "domainMatches": ["xiaohongshu.com", "xhslink.com", "xhs.cn"],
+      "displayName": "小红书",
+      "targetPackage": "com.xingin.xhs",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-zhihu",
+      "domainMatches": ["zhihu.com"],
+      "displayName": "知乎",
+      "targetPackage": "com.zhihu.android",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-douyin",
+      "domainMatches": ["douyin.com", "iesdouyin.com"],
+      "displayName": "抖音",
+      "targetPackage": "com.ss.android.ugc.aweme",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-kuaishou",
+      "domainMatches": ["kuaishou.com", "gifshow.com", "chenzhongtech.com"],
+      "displayName": "快手",
+      "targetPackage": "com.smile.gifmaker",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-bilibili",
+      "domainMatches": ["bilibili.com", "b23.tv"],
+      "displayName": "哔哩哔哩",
+      "targetPackage": "tv.danmaku.bili",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-weibo",
+      "domainMatches": ["weibo.com", "weibo.cn", "t.cn"],
+      "displayName": "微博",
+      "targetPackage": "com.sina.weibo",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-wechat",
+      "domainMatches": ["mp.weixin.qq.com", "weixin.qq.com"],
+      "displayName": "微信",
+      "targetPackage": "com.tencent.mm",
+      "iconSource": "PACKAGE",
+      "priority": 200,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-qq",
+      "domainMatches": ["qm.qq.com", "url.cn"],
+      "displayName": "QQ",
+      "targetPackage": "com.tencent.mobileqq",
+      "iconSource": "PACKAGE",
+      "priority": 80,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-taobao",
+      "domainMatches": ["taobao.com", "tb.cn"],
+      "displayName": "淘宝",
+      "targetPackage": "com.taobao.taobao",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-tmall",
+      "domainMatches": ["tmall.com"],
+      "displayName": "天猫",
+      "targetPackage": "com.tmall.wireless",
+      "iconSource": "PACKAGE",
+      "priority": 110,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-idlefish",
+      "domainMatches": ["goofish.com", "2.taobao.com"],
+      "displayName": "闲鱼",
+      "targetPackage": "com.taobao.idlefish",
+      "iconSource": "PACKAGE",
+      "priority": 130,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-jd",
+      "domainMatches": ["jd.com", "jd.hk", "3.cn"],
+      "displayName": "京东",
+      "targetPackage": "com.jingdong.app.mall",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-pinduoduo",
+      "domainMatches": ["yangkeduo.com", "pinduoduo.com"],
+      "displayName": "拼多多",
+      "targetPackage": "com.xunmeng.pinduoduo",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-meituan",
+      "domainMatches": ["meituan.com", "meituan.net"],
+      "displayName": "美团",
+      "targetPackage": "com.sankuai.meituan",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-dianping",
+      "domainMatches": ["dianping.com"],
+      "displayName": "大众点评",
+      "targetPackage": "com.dianping.v1",
+      "iconSource": "PACKAGE",
+      "priority": 110,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-eleme",
+      "domainMatches": ["ele.me"],
+      "displayName": "饿了么",
+      "targetPackage": "me.ele",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-ctrip",
+      "domainMatches": ["ctrip.com", "trip.com"],
+      "displayName": "携程",
+      "targetPackage": "ctrip.android.view",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-alipay",
+      "domainMatches": ["alipay.com"],
+      "displayName": "支付宝",
+      "targetPackage": "com.eg.android.AlipayGphone",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-qqlive",
+      "domainMatches": ["v.qq.com"],
+      "displayName": "腾讯视频",
+      "targetPackage": "com.tencent.qqlive",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-iqiyi",
+      "domainMatches": ["iqiyi.com"],
+      "displayName": "爱奇艺",
+      "targetPackage": "com.qiyi.video",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-youku",
+      "domainMatches": ["youku.com"],
+      "displayName": "优酷",
+      "targetPackage": "com.youku.phone",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-mgtv",
+      "domainMatches": ["mgtv.com"],
+      "displayName": "芒果TV",
+      "targetPackage": "com.hunantv.imgo.activity",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-netease-music",
+      "domainMatches": ["music.163.com", "163cn.tv"],
+      "displayName": "网易云音乐",
+      "targetPackage": "com.netease.cloudmusic",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-qqmusic",
+      "domainMatches": ["y.qq.com"],
+      "displayName": "QQ音乐",
+      "targetPackage": "com.tencent.qqmusic",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-kugou",
+      "domainMatches": ["kugou.com"],
+      "displayName": "酷狗音乐",
+      "targetPackage": "com.kugou.android",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-ximalaya",
+      "domainMatches": ["ximalaya.com"],
+      "displayName": "喜马拉雅",
+      "targetPackage": "com.ximalaya.ting.android",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-douban",
+      "domainMatches": ["douban.com"],
+      "displayName": "豆瓣",
+      "targetPackage": "com.douban.frodo",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-tieba",
+      "domainMatches": ["tieba.baidu.com"],
+      "displayName": "百度贴吧",
+      "targetPackage": "com.baidu.tieba",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-toutiao",
+      "domainMatches": ["toutiao.com"],
+      "displayName": "今日头条",
+      "targetPackage": "com.ss.android.article.news",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-ixigua",
+      "domainMatches": ["ixigua.com"],
+      "displayName": "西瓜视频",
+      "targetPackage": "com.ss.android.article.video",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-pipix",
+      "domainMatches": ["pipix.com"],
+      "displayName": "皮皮虾",
+      "targetPackage": "com.sup.android.superb",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-dewu",
+      "domainMatches": ["dewu.com", "poizon.com"],
+      "displayName": "得物",
+      "targetPackage": "com.shizhuang.duapp",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-vipshop",
+      "domainMatches": ["vip.com"],
+      "displayName": "唯品会",
+      "targetPackage": "com.achievo.vipshop",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-qidian",
+      "domainMatches": ["qidian.com"],
+      "displayName": "起点读书",
+      "targetPackage": "com.qidian.QDReader",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-fanqie",
+      "domainMatches": ["fanqienovel.com"],
+      "displayName": "番茄小说",
+      "targetPackage": "com.dragon.read",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-netease-news",
+      "domainMatches": ["news.163.com", "3g.163.com"],
+      "displayName": "网易新闻",
+      "targetPackage": "com.netease.newsreader.activity",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-csdn",
+      "domainMatches": ["csdn.net"],
+      "displayName": "CSDN",
+      "targetPackage": "net.csdn.csdnplus",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "ruleId": "default-hupu",
+      "domainMatches": ["hupu.com"],
+      "displayName": "虎扑",
+      "targetPackage": "com.hupu.games",
+      "iconSource": "PACKAGE",
+      "priority": 100,
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Apple 流体前景：白色 material 卡片（78% 白 + 黑柔影 + 白高光描边），
+  窗框用唯一交互色 Action Blue #0066CC。iOS 图标的语言是「一块干净的材质」。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 落影 -->
+    <path
+        android:fillColor="#1F3C3C43"
+        android:pathData="M48.5,36 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z" />
+
+    <!-- 材质本体 -->
+    <path android:pathData="M45.5,32 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54"
+                android:startY="32"
+                android:endX="54"
+                android:endY="76"
+                android:startColor="#FFFFFFFF"
+                android:endColor="#F2F6FA" />
+        </aapt:attr>
+    </path>
+
+    <path
+        android:strokeColor="#E6E6EB"
+        android:strokeWidth="1"
+        android:pathData="M45.5,32 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z" />
+
+    <path
+        android:strokeColor="#0066CC"
+        android:strokeWidth="3.5"
+        android:pathData="M47,39 h14 a8,8 0 0 1 8,8 v14 a8,8 0 0 1 -8,8 h-14 a8,8 0 0 1 -8,-8 v-14 a8,8 0 0 1 8,-8 z" />
+    <path
+        android:strokeColor="#0066CC"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M54,39.5 v29" />
+</vector>

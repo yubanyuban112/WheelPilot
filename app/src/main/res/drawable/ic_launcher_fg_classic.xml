@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  经典拟物前景：与新拟物同构（同色本体 + 单向软影 + 窗框），
+  只把强调色换成经典版蓝紫 #2F6BFF、本体换成 #E6E9EF。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#2A9AA3B0"
+        android:pathData="M49,36 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z" />
+    <path
+        android:fillColor="#50A9B2C1"
+        android:pathData="M47,34.5 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z" />
+
+    <path
+        android:fillColor="#2EFFFFFF"
+        android:pathData="M41.5,28 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z" />
+    <path
+        android:fillColor="#55FFFFFF"
+        android:pathData="M43,29.5 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z" />
+
+    <path
+        android:fillColor="#E6E9EF"
+        android:pathData="M45.5,32 h17 a13.5,13.5 0 0 1 13.5,13.5 v17 a13.5,13.5 0 0 1 -13.5,13.5 h-17 a13.5,13.5 0 0 1 -13.5,-13.5 v-17 a13.5,13.5 0 0 1 13.5,-13.5 z" />
+
+    <path
+        android:strokeColor="#2F6BFF"
+        android:strokeWidth="3.5"
+        android:pathData="M47,39 h14 a8,8 0 0 1 8,8 v14 a8,8 0 0 1 -8,8 h-14 a8,8 0 0 1 -8,-8 v-14 a8,8 0 0 1 8,-8 z" />
+    <path
+        android:strokeColor="#2F6BFF"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M54,39.5 v29" />
+</vector>

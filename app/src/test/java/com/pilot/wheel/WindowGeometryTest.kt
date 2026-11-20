@@ -42,6 +42,24 @@ class WindowGeometryTest {
     }
 
     @Test
+    fun `content bounds leave room for chat input and keyboard`() {
+        // 分享/授权场景用的几何必须明显比原生小窗高，否则微信聊天页顶部消息和输入框会被裁
+        val native = WindowGeometry.freeformBounds(1272, 2800)!!
+        val content = WindowGeometry.contentBounds(1272, 2800)!!
+        assertTrue(content.height > native.height * 1.3f)
+        assertEquals(0, (1272 - content.width) / 2 - content.left)
+        assertTrue(content.top + content.height < 2800)
+        // 屏幕上下各留 10%，键盘弹出时不会被窗口压住
+        assertEquals((2800 * WindowGeometry.CONTENT_TOP_FACTOR).toInt(), content.top)
+    }
+
+    @Test
+    fun `content bounds reject invalid size`() {
+        assertNull(WindowGeometry.contentBounds(0, 2800))
+        assertNull(WindowGeometry.contentBounds(1272, 0))
+    }
+
+    @Test
     fun `landscape uses short side and landscape factors`() {
         // 横屏 2800×1272：宽 = 短边 1272×0.58 = 737
         val r = WindowGeometry.freeformBounds(2800, 1272)!!

@@ -1,9 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  为什么需要 canRetrieveWindowContent + flagRetrieveInteractiveWindows：
+  1. 判断「屏幕上有没有输入法窗口」只能靠 getWindows() 里的窗口类型
+     （TYPE_INPUT_METHOD）。这个列表在 canRetrieveWindowContent=false 时拿不到，
+     导致键盘让位、轻量打开的输入法过滤、失焦判定全部静默失效。
+  2. typeWindowsChanged 是键盘弹出/收起最可靠的信号：收起键盘不一定产生
+     TYPE_WINDOW_STATE_CHANGED，只监听后者会一直停在「键盘在屏」的旧状态。
+  只读取窗口类型与前台包名，不保存任何界面文本。
+
+  canRequestFilterKeyEvents + flagRequestFilterKeyEvents（C4 智能音量）：
+  只有打开这两项，onKeyEvent 才会收到音量键。不开时该功能静默失效，
+  不会影响其它任何行为。
+
+  canPerformGestures（热区穿透回传，2026-11-20 补）：
+  热区窗口可触摸时，点击/划动靠「临时 FLAG_NOT_TOUCHABLE → dispatchGesture
+  注入下层」回传。dispatchGesture 要求服务持有 CAPABILITY_CAN_PERFORM_GESTURES
+  (0x20)，该能力只来自本属性；缺失时 dispatchGesture 直接返回 false，
+  下层什么都收不到 —— 而窗口已经把这一下 DOWN 吞掉了，表现为「热区覆盖区点不动」。
+  实测 dumpsys accessibility 显示 capabilities=9（缺 0x20）即为本缺陷。
+-->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged|typeTouchInteractionStart"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagDefault"
-    android:canRetrieveWindowContent="false"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagRequestFilterKeyEvents|flagSendMotionEvents"
+    android:canRequestFilterKeyEvents="true"
+    android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true"
     android:description="@string/service_desc"
     android:notificationTimeout="100"
     android:settingsActivity="com.pilot.wheel.MainActivity" />
