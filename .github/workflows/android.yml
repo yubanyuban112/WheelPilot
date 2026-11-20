@@ -21,10 +21,6 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
-      # compileSdk 37 需要 android-37 平台；native 探测需要 NDK 26.3；显式安装避免 Gradle 自动下载失败
-      - name: Install required SDK packages
-        run: sdkmanager "platforms;android-37" "build-tools;36.0.0" "ndk;26.3.11579264"
-
       # 单测先跑：纯 JVM 逻辑（几何 / 解析 / 备份编解码），失败就不必继续打 APK
       - name: Unit tests
         run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
