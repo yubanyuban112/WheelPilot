@@ -190,9 +190,10 @@ static std::mutex             g_collect_mutex;
 // 全局缓存的 JavaVM 指针（首次 JNI 调用时缓存，供采集线程 AttachCurrentThread）
 static JavaVM* g_jvm = nullptr;
 
-// 缓存 NativeInputProbe.onNativeTouch 的静态 jmethodID（线程安全：启动前解析一次）
+// 缓存 NativeInputProbe.onNativeTouch / onNativeCollectExit 的静态 jmethodID（启动前解析一次）
 static jclass    g_native_probe_cls = nullptr;
 static jmethodID g_on_native_touch = nullptr;
+static jmethodID g_on_native_collect_exit = nullptr;
 
 // 单个触点的槽位状态（type B 协议）
 struct SlotState {
@@ -246,19 +247,28 @@ static void collectLoop(int fd) {
         prevX[i] = 0.0f;
         prevY[i] = 0.0f;
     }
-    bool sawTrackingId = false;  // 见过 ABS_MT_TRACKING_ID → type B 主路径
-    bool frameDirty = false;     // 本帧是否出现过触点相关事件
+    bool sawTrackingId = false;        // 见过 ABS_MT_TRACKING_ID >= 0（可能是 type A 伪装）
+    bool sawTrackingIdRelease = false; // 见过 ABS_MT_TRACKING_ID < 0（真 type B 的决定性标志）
+    bool frameDirty = false;           // 本帧是否出现过触点相关事件
 
     // —— type A 兜底（老式单点/type A 设备，无 trackingId）——
     int  btnTouch = 0;           // BTN_TOUCH 持久值（仅按下/抬起才上报，不每帧重置）
     bool prevAPressed = false;
     float prevAX = 0.0f, prevAY = 0.0f;
 
-    // SYN_REPORT 收口：type B 主路径，按 trackingId 迁移合成
+    // SYN_REPORT 收口：type B 主路径，按 trackingId 迁移合成。
+    // 74 号修复：部分设备（如 HONOR AAK-AN00 / Android 17）每帧上报
+    // ABS_MT_TRACKING_ID 恒为 0、抬起时不发 -1，只靠 BTN_TOUCH DOWN/UP 切换。
+    // 旧实现把「见过 TRACKING_ID>=0」当作 type B、并只用 -1 判抬起，导致
+    // prevTrackingId 永久卡在 0：首个 DOWN 之后再也无 DOWN/UP，轮盘只触发一次。
+    // 现在把 BTN_TOUCH 抬起（btnTouch==0）作为权威抬起信号：BTN_TOUCH 释放时
+    // 强制本帧所有槽判为抬起并重置 prevTrackingId=-1；type B 真机同样上报
+    // BTN_TOUCH，语义一致，互不冲突。
     auto emitFrameTypeB = [&]() {
+        const bool btnReleased = (btnTouch == 0);
         for (int s = 0; s < MAX_SLOTS; s++) {
             const int  nowId   = slots[s].trackingId;
-            const bool nowDown = nowId >= 0;
+            const bool nowDown = nowId >= 0 && !btnReleased;
             const bool wasDown = prevTrackingId[s] >= 0;
             if (nowDown && !wasDown) {
                 emit(TYPE_DOWN, slots[s].x, slots[s].y, s);
@@ -269,7 +279,9 @@ static void collectLoop(int fd) {
             } else if (!nowDown && wasDown) {
                 emit(TYPE_UP, prevX[s], prevY[s], s);
             }
-            prevTrackingId[s] = nowId;
+            // 抬起（包括 BTN_TOUCH 强制抬起）后清空 prevTrackingId，
+            // 保证下一帧能重新识别为 DOWN。
+            prevTrackingId[s] = nowDown ? nowId : -1;
             prevX[s] = slots[s].x;
             prevY[s] = slots[s].y;
         }
@@ -295,6 +307,8 @@ static void collectLoop(int fd) {
     };
 
     struct input_event ev[32];
+    // 退出原因：0=主动 stop（running=false 自然退出，不回调）；1=poll 失败；2=read EOF；3=read 致命错误；4=设备失效（POLLERR/HUP/NVAL）
+    int exitReason = 0;
     while (g_collect_running.load(std::memory_order_acquire)) {
         struct pollfd pfd;
         pfd.fd = fd;
@@ -303,16 +317,26 @@ static void collectLoop(int fd) {
         int pr = poll(&pfd, 1, 200 /* ms */);
         if (pr < 0) {
             if (errno == EINTR) continue;
-            break; // poll 失败（如 fd 被关闭），退出
+            exitReason = 1; // poll 失败（如 fd 被关闭 / 设备重枚举）
+            break;
         }
         if (pr == 0) continue; // 超时，回到循环检查停止标志
+        // 70 号：息屏时触摸屏下电 / 设备重枚举 → poll 返回 POLLERR/POLLHUP/POLLNVAL。
+        // 旧实现把这类 revents 当普通事件 continue，线程握着旧 fd 死等（revents 永远不再有 POLLIN），
+        // 只能靠主进程 10 分钟盲判兜底 —— 这正是「息屏后第一滑唤不出」的根因。
+        // 现在识别为 device_gone 立即退出并回传，主进程秒级降级无障碍 + 重建采集。
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            exitReason = 4;
+            break;
+        }
         if (!(pfd.revents & POLLIN)) continue;
 
         ssize_t n = read(fd, ev, sizeof(ev));
         if (n <= 0) {
             if (n < 0 && errno == EINTR) continue;
             if (n < 0 && errno == EAGAIN) continue;
-            break; // EOF 或致命错误
+            exitReason = (n == 0) ? 2 : 3; // EOF 或致命错误（如 ENODEV 屏下电）
+            break;
         }
         const size_t cnt = static_cast<size_t>(n) / sizeof(struct input_event);
         for (size_t i = 0; i < cnt; i++) {
@@ -333,6 +357,10 @@ static void collectLoop(int fd) {
                     case ABS_MT_TRACKING_ID:
                         slots[curSlot].trackingId = e.value; // -1 = 抬起
                         sawTrackingId = true;
+                        // 74 号：只有真正出现 -1 抬起才算 type B。
+                        // type A 风格设备每帧上报 TRACKING_ID 恒为 0，永远不到这里，
+                        // 从而走 BTN_TOUCH 边沿的 type A 路径，避免只合成一次 DOWN。
+                        if (e.value < 0) sawTrackingIdRelease = true;
                         frameDirty = true;
                         break;
                     default:
@@ -343,7 +371,10 @@ static void collectLoop(int fd) {
                 frameDirty = true;
             } else if (e.type == EV_SYN && e.code == SYN_REPORT) {
                 if (frameDirty) {
-                    if (sawTrackingId) {
+                    // 74 号：用「是否见过 TRACKING_ID=-1 抬起」判协议，而非「是否见过 >=0」。
+                    // 本机 type A 风格设备的 TRACKING_ID 恒为 0（无 -1），走 type A 路径，
+                    // 靠 BTN_TOUCH DOWN/UP 边沿正确合成每次手势的 DOWN/MOVE/UP。
+                    if (sawTrackingIdRelease) {
                         emitFrameTypeB();
                     } else {
                         emitFrameTypeA();
@@ -355,6 +386,17 @@ static void collectLoop(int fd) {
     }
 
     close(fd);
+
+    // 69 号：异常退出（poll/read 失败）时回传 Java。主动 stop 是 running=false 自然退出循环，
+    // exitReason 保持 0，不误报。异常退出须复位 running，否则下次 startCollect 会卡「已在采集」。
+    if (exitReason != 0) {
+        g_collect_running.store(false, std::memory_order_release);
+        if (env != nullptr && g_native_probe_cls != nullptr && g_on_native_collect_exit != nullptr) {
+            env->CallStaticVoidMethod(g_native_probe_cls, g_on_native_collect_exit,
+                                      static_cast<jint>(exitReason));
+            if (env->ExceptionCheck()) env->ExceptionClear();
+        }
+    }
 
     if (attached) {
         g_jvm->DetachCurrentThread();
@@ -373,6 +415,9 @@ Java_com_pilot_wheel_NativeInputProbe_nativeStartCollect(JNIEnv* env, jobject /*
         g_native_probe_cls = static_cast<jclass>(env->NewGlobalRef(local));
         g_on_native_touch = env->GetStaticMethodID(
             g_native_probe_cls, "onNativeTouch", "(IFFI)V");
+        // 退出回传方法 ID：与 Java 同版本打包，方法必然存在；解析失败仅降级为不回调
+        g_on_native_collect_exit = env->GetStaticMethodID(
+            g_native_probe_cls, "onNativeCollectExit", "(I)V");
         env->DeleteLocalRef(local);
         if (g_on_native_touch == nullptr) {
             return -2; // 方法解析失败

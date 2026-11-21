@@ -47,9 +47,14 @@ object PilotShellClient {
      * 新方法会落在旧 dex 上（53 号坑④）。
      * 4 = 58 号新增 readClipboardText（AIDL 18）；
      * 5 = 58 号修正其空剪贴板判定（**实现改动也要 +1**：124 未升版本，靠手动 kill
-     *     `com.pilot.wheel:pilot-shell` 才生效，见 `57-59_*_改动清单.md` §坑）。
+     *     `com.pilot.wheel:pilot-shell` 才生效，见 `57-59_*_改动清单.md` §坑）；
+     * 6 = 68 号 pumpEvents 意外 EOF 回传 STATE_THREAD_EXIT（实现改动也要 +1）。
+     * 7 = 69 号 native 采集线程退出回传 onNativeCollectExit（shell 侧实现改动也要 +1）。
+     * 8 = 70 号 native poll 感知 POLLERR/HUP/NVAL → exitReason=4 device_gone（实现改动也要 +1）。
+     * 9 = 74 号 native 协议判别改为「见过 TRACKING_ID<0 才是 type B」，修复 type A 风格设备
+     *     只合成一次 DOWN 导致锁屏亮屏后轮盘永久失灵（native .so 改动也要 +1）。
      */
-    private const val VERSION = 5
+    private const val VERSION = 9
     private const val BIND_TIMEOUT_MS = 6_000L
     private const val DOWN_WINDOW_MS = 15_000L
 
@@ -109,8 +114,15 @@ object PilotShellClient {
     fun isTraceReady(): Boolean = service != null
 
     /** 当前是否有一条可用的常驻通道（冷却期内恒 false） */
-    fun available(): Boolean =
-        service != null && SystemClock.elapsedRealtime() >= downUntil && possible()
+    fun available(): Boolean {
+        if (SystemClock.elapsedRealtime() < downUntil) return false
+        if (!possible()) return false
+        val svc = service ?: return false
+        // 68 号修复：缓存的 binder 可能已死（pilot-shell 进程被系统回收），available 必须
+        // ping 验活，否则 healthTick 的「链路存活」判据永远为 true，死进程要到某次调用
+        // 抛 DeadObjectException 才被发现 —— 那正是「久用后旁路触摸失效」的静默死因之一。
+        return runCatching { svc.asBinder().pingBinder() }.getOrDefault(false)
+    }
 
     /** 通道状态字符串，写日志/设置页展示用 */
     fun describe(): String = when {

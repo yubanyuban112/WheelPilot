@@ -154,6 +154,15 @@ class RawHotspotController(
     @Volatile
     private var channelUpAt = 0L
 
+    /**
+     * 70 号：本次建链后旁路是否真正收到过触摸事件。
+     * 建链成功 ≠ 能收到事件——markChannelUp() 把静默基线重置为「现在」，仅靠 isSilent()
+     * 会让「亮屏重建窗口内的第一滑」既不被旁路消费、也不被无障碍接管（掉进缝里）。
+     * 只有 onRawTouch/onMotionEvent 真实收到事件才置 true；重建/建链时置 false。
+     */
+    @Volatile
+    private var bypassConfirmed = false
+
     /** 62 号：重启互斥，避免健康巡检 / 线程退出 / 重试三路叠加重复停采集 */
     @Volatile
     private var restarting = false
@@ -179,6 +188,7 @@ class RawHotspotController(
         override fun onRawTouch(type: Int, rawX: Float, rawY: Float, slot: Int) {
             // 62 号：先盖时间戳再看通道开销——静默看门狗要的是「有没有事件」而不是「事件是否被消费」
             lastEventAt = SystemClock.elapsedRealtime()
+            bypassConfirmed = true // 70 号：旁路确实收到事件，确认存活，交回旁路通道
             // 采集回调（binder 线程）→ 判定线程；不经过主线程
             routerHandler.post { handleRawTouch(type, rawX, rawY) }
         }
@@ -200,6 +210,7 @@ class RawHotspotController(
         override fun onMotionEvent(action: Int, x: Float, y: Float, eventTime: Long) {
             // 62 号：同上，monitorInput 通道的事件也计入存活证据
             lastEventAt = SystemClock.elapsedRealtime()
+            bypassConfirmed = true // 70 号：monitorInput 通道收到事件，同样确认旁路存活
             // monitorInput 路径：屏幕逻辑坐标 → 判定线程
             routerHandler.post { handleMotionEvent(action, x, y, eventTime) }
         }
@@ -537,6 +548,9 @@ class RawHotspotController(
         val now = SystemClock.elapsedRealtime()
         channelUpAt = now
         lastEventAt = now
+        // 70 号：重建只是「建好管道」，还没证明能收到事件。清空确认标志，
+        // 在第一个真实事件到来前由无障碍兜底接管，覆盖亮屏后的第一滑。
+        bypassConfirmed = false
     }
 
     /** 62.1：浏览器是否已静默到「可疑」——供无障碍侧判断要不要接管本次手势 */
@@ -546,6 +560,13 @@ class RawHotspotController(
         if (base <= 0L) return false
         return SystemClock.elapsedRealtime() - base > SILENCE_PROBE_MS
     }
+
+    /**
+     * 70 号：无障碍是否应接管本次手势（替代裸 [isSilent] 判据）。
+     * = 旁路尚未确认收到过事件（重建窗口） OR 已静默到可疑。
+     * 这样亮屏重建后、第一个真实旁路事件到来前，用户第一滑也由 a11y 走完，不再落空。
+     */
+    fun shouldA11yTakeover(): Boolean = !bypassConfirmed || isSilent()
 
     /**
      * 62.1：无障碍侧看到触摸、而旁路静默 → 旁路收不到事件的实证，立即重启。
@@ -558,6 +579,31 @@ class RawHotspotController(
         val silence = now - maxOf(lastEventAt, channelUpAt)
         if (silence < SILENCE_PROBE_MS) return
         restartQuietly("dead_silent", "a11y_seen silent=${silence}ms")
+    }
+
+    /**
+     * 72 号：亮屏**不再主动掐断重建**，只把静默基线刷到「现在」。
+     *
+     * 68 号曾在此无条件 restartQuietly（stop 采集 + 切无障碍层 + ~100ms 后重建），
+     * 真机 trace 证明这是「息屏几秒第一滑唤不出」的真正根因：
+     *  - 短息屏（几秒）时 native 线程和 fd 根本没死（0 次 device_gone / STATE_THREAD_EXIT / EOF），
+     *    却被无条件 stop→restart，制造 ~100ms 无采集窗口；
+     *  - 该窗口要靠 a11y onMotionEvent 兜底，但本机 a11y 收不到触摸事件
+     *    （25 次降级全 silent 盲判、0 次 a11y_seen、BYPASS_TAKEOVER 从不出现），
+     *    于是第一滑既无人消费也无人接管 → 落空。
+     *
+     * 真正的死亡由既有机制兜底，无需亮屏重建：
+     *  ①69 号 native poll 的 POLLERR/HUP/NVAL → device_gone 即时回传重建；
+     *  ②68 号 available() pingBinder → link_down 巡检重建；
+     *  ③10 分钟静默盲判 → 兜底最后一道。
+     * 亮屏只需重置 lastEventAt/channelUpAt，避免息屏期间的「无事件」被误判为静默死亡。
+     */
+    fun onScreenOn() {
+        if (!running) return
+        val now = SystemClock.elapsedRealtime()
+        channelUpAt = now
+        lastEventAt = now
+        PilotShellClient.trace("SCREEN_ON_BASELINE", "亮屏仅刷新静默基线，不掐断采集")
     }
 
     /**

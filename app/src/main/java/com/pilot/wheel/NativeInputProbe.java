@@ -90,6 +90,36 @@ public final class NativeInputProbe {
         }
     }
 
+    /**
+     * 69 号：native 采集线程退出回调入口（由 native_input_probe.cpp 的 collectLoop 在
+     * poll/read 失败、异常退出时通过 JNI 调用）。
+     *
+     * 只在此处收到「异常退出」信号；主动 stop 走 nativeStopCollect 置 running=false 自然退出，
+     * native 侧不会回调本方法。
+     *
+     * @param reason 1=poll 失败；2=read EOF；3=read 致命错误
+     */
+    @androidx.annotation.Keep
+    public static void onNativeCollectExit(int reason) {
+        final CollectExitListener l = collectExitListener;
+        if (l != null) {
+            l.onExit(reason);
+        }
+    }
+
+    /** native 采集线程异常退出的监听器（由 PilotShellService 注入） */
+    public interface CollectExitListener {
+        void onExit(int reason);
+    }
+
+    @androidx.annotation.Keep
+    private static volatile CollectExitListener collectExitListener = null;
+
+    /** 注入退出监听器；传 null 清空。 */
+    public static void setCollectExitListener(CollectExitListener l) {
+        collectExitListener = l;
+    }
+
     /** native 采集线程的触点消费者（由 PilotShellService 注入，等价旧 emit(cb,...)） */
     public interface Emitter {
         void emit(int type, float rawX, float rawY, int slot);

@@ -288,6 +288,13 @@ class PilotShellService : IPilotShellService.Stub() {
     @Volatile
     private var rawTouchCallback: IRawTouchCallback? = null
 
+    /**
+     * 68 号：停止标志。stopRawTouch 主动销毁 getevent 时置位，pumpEvents 据此区分
+     * 「主动停」（不误报）与「意外 EOF / 异常」（回传 STATE_THREAD_EXIT 触发重建）。
+     */
+    @Volatile
+    private var rawTouchStopping = false
+
     /** 用户态通过 attachRawTouchCallback 注册；本进程无 Context，回调靠 binder 反调 */
     override fun attachRawTouchCallback(cb: IRawTouchCallback?) {
         rawTouchCallback = cb
@@ -296,6 +303,7 @@ class PilotShellService : IPilotShellService.Stub() {
     override fun startRawTouch(device: String): Int {
         val cb = rawTouchCallback ?: return ERR_FAILED
         if (collectorThread != null || nativeCollecting) return OK // 已在跑，幂等
+        rawTouchStopping = false
         // 优先 native 直读（零子进程、低延迟）；.so 未编译/打开失败时退回 getevent 子进程
         if (tryStartNativeCollect(device, cb)) {
             return OK
@@ -330,10 +338,27 @@ class PilotShellService : IPilotShellService.Stub() {
         NativeInputProbe.setEmitter { type, x, y, slot ->
             try { cb.onRawTouch(type, x, y, slot) } catch (_: Throwable) {}
         }
+        // 69 号：注册退出监听。native 采集线程在 poll/read 失败时静默 break（息屏屏下电 /
+        // 设备重枚举），binder 仍活着、available() 的 ping 发现不了，只能靠主进程 10 分钟盲判兜底。
+        // 这里把「线程异常退出」即时回传 STATE_THREAD_EXIT，主进程据此立即降级无障碍并重试。
+        NativeInputProbe.setCollectExitListener { reason ->
+            if (!nativeCollecting) return@setCollectExitListener
+            nativeCollecting = false
+            val why = when (reason) {
+                1 -> "poll_fail"
+                2 -> "read_eof"
+                3 -> "read_fail"
+                4 -> "device_gone" // 70 号：息屏重枚举 / POLLERR/POLLHUP/POLLNVAL，设备已失效
+                else -> "unknown:$reason"
+            }
+            Log.d(TAG, "native collect exited: $why")
+            try { cb.onCollectorState(STATE_THREAD_EXIT, "native:$why") } catch (_: Throwable) {}
+        }
         val rc = NativeInputProbe.startCollect(device)
         if (rc != 0) {
             Log.d(TAG, "native collect start failed rc=$rc, fallback getevent")
             NativeInputProbe.setEmitter(null)
+            NativeInputProbe.setCollectExitListener(null)
             return false
         }
         nativeCollecting = true
@@ -342,10 +367,12 @@ class PilotShellService : IPilotShellService.Stub() {
     }
 
     override fun stopRawTouch() {
+        rawTouchStopping = true
         // 停 native 采集
         if (nativeCollecting) {
             NativeInputProbe.stopCollect()
             NativeInputProbe.setEmitter(null)
+            NativeInputProbe.setCollectExitListener(null)
             nativeCollecting = false
         }
         // 停 getevent 子进程（幂等）
@@ -404,9 +431,18 @@ class PilotShellService : IPilotShellService.Stub() {
                     }
                 }
             }
+            // 68 号修复：forEachLine 正常结束 = getevent 读到 EOF（设备重枚举 / 屏下电）。
+            // 主动 stop 时 rawTouchStopping 已置位不误报；真正意外 EOF 才回传，
+            // 否则客户端「自认可用但零事件」静默死亡（available 永远 true）。
+            if (!rawTouchStopping) {
+                Log.d(TAG, "raw touch pump eof (device likely re-enumerated)")
+                try { cb.onCollectorState(STATE_THREAD_EXIT, "eof") } catch (_: Throwable) {}
+            }
         } catch (t: Throwable) {
             Log.d(TAG, "raw touch pump exit: ${t.javaClass.simpleName}")
-            try { cb.onCollectorState(STATE_THREAD_EXIT, t.javaClass.simpleName) } catch (_: Throwable) {}
+            if (!rawTouchStopping) {
+                try { cb.onCollectorState(STATE_THREAD_EXIT, t.javaClass.simpleName) } catch (_: Throwable) {}
+            }
         }
     }
 

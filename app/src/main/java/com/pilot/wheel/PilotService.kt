@@ -37,6 +37,8 @@ import com.pilot.wheel.core.DisplayGate
 import com.pilot.wheel.core.GestureArbiter
 import com.pilot.wheel.core.HotspotHitRules
 import com.pilot.wheel.core.ReplaySemantics
+import com.pilot.wheel.core.TaskBinderBridge
+import com.pilot.wheel.core.WindowStateParser
 import com.pilot.wheel.core.WindowRect
 import com.pilot.wheel.core.navBarBottomPx
 import com.pilot.wheel.core.physicalBounds
@@ -178,7 +180,18 @@ class PilotService : AccessibilityService() {
      */
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            main.post { updateScenePause(null) }
+            main.post {
+                // 72 号：亮屏只刷新旁路静默基线，**不再无条件掐断重建**。
+                // 68 号的主动重建在本机是「息屏几秒第一滑落空」的根因——短息屏采集没死，
+                // 重建反而制造 ~100ms 空窗，而 a11y 兜底本机收不到事件。
+                // 真死亡由 device_gone 回传 / pingBinder / 静默盲判兜底。
+                if (intent?.action == Intent.ACTION_SCREEN_ON ||
+                    intent?.action == Intent.ACTION_USER_PRESENT
+                ) {
+                    rawHotspot?.onScreenOn()
+                }
+                updateScenePause(null)
+            }
         }
     }
 
@@ -327,25 +340,33 @@ class PilotService : AccessibilityService() {
         // 维度5：降级开关——关闭后本兜底层完全静默，触摸感知退回纯 Shizuku 旁路，
         // 无障碍服务只保留窗口类型持有与必要节点读取，不再介入任何触摸事件流。
         if (!Prefs.a11yFallbackEnabled(this)) return
-        if (TouchLayerState.current == TouchLayerState.Layer.ACCESSIBILITY) {
-            handleA11yMotion(event)
-            return
+        // 71 号：把「本次手势是否由 a11y 接管」的判定统一到 ACTION_DOWN，一旦接管就锁住整段
+        // 手势（MOVE/UP 不再重判）。修复 70 号的致命嵌套：
+        //   70 号把 a11yTakeoverUntil 的窗口判定嵌在 shouldA11yTakeover() 内部——
+        //   DOWN 时旁路未确认(bypassConfirmed=false) → 进、设窗口；但亮屏重建通常 <100ms，
+        //   MOVE 到来时旁路已恢复并收到事件把 bypassConfirmed 置 true →
+        //   shouldA11yTakeover() 翻 false → MOVE 被挡在外层 → 仲裁器只收到 DOWN 没有 MOVE，
+        //   手势被割裂（DOWN 给 a11y、MOVE 给旁路），两路都不触发 → 第一滑落空。
+        //   真机铁证：亮屏后每滑只见 `GATE ... src=a11y`，无任何 EDGE/触发日志。
+        // 新规则：DOWN 时判定一次，layer 是 ACCESSIBILITY 或旁路未确认/静默即接管；
+        // 之后整段手势只看 a11yTakeoverUntil，不再被 bypassConfirmed 翻转打断。
+        val layerA11y = TouchLayerState.current == TouchLayerState.Layer.ACCESSIBILITY
+        if (event.actionMasked == MotionEvent.ACTION_DOWN &&
+            (layerA11y || rawHotspot?.shouldA11yTakeover() == true)
+        ) {
+            a11yTakeoverUntil = nowA11y + A11Y_TAKEOVER_MS
+            // 旁路静默时把触摸作为「旁路已死」实证，触发即时重建（内部 silence<8s 保护，
+            // 亮屏重建刚 markChannelUp 时会 return，不会重复重启）。
+            rawHotspot?.onA11yEvidence()
+            PilotShellClient.trace(
+                "BYPASS_TAKEOVER",
+                "action=DOWN layer=${TouchLayerState.current} locked=${A11Y_TAKEOVER_MS}ms",
+            )
         }
-        // 62.1：旁路层自称在跑，但已经静默到可疑 —— 这一下 a11y 收到了、旁路没收到。
-        // 处理：①立即通知旁路重启（不等 5s 巡检）②把**本次手势**交给 a11y 走完，
-        // 否则用户这一滑就白费了（旧实现要等下一滑才有反应）。
-        if (rawHotspot?.isSilent() == true) {
-            if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-                a11yTakeoverUntil = nowA11y + A11Y_TAKEOVER_MS
-                rawHotspot?.onA11yEvidence()
-            }
-            if (nowA11y < a11yTakeoverUntil) {
-                PilotShellClient.trace(
-                    "BYPASS_TAKEOVER",
-                    "action=${event.actionMasked} layer=${TouchLayerState.current}",
-                )
-                handleA11yMotion(event)
-            }
+        // 窗口内（含整段 MOVE/UP）无条件交给 a11y 走完；窗口判定在 shouldA11yTakeover 之外。
+        // 另：layer 稳定处于 ACCESSIBILITY（旁路长期降级）时也始终交给 a11y，不被窗口过期切断。
+        if (nowA11y < a11yTakeoverUntil || layerA11y) {
+            handleA11yMotion(event)
         }
     }
 
@@ -1293,32 +1314,71 @@ class PilotService : AccessibilityService() {
             val existing = FreeformWindowRegistry.findByPkg(app.pkg)
             if (existing != null) {
                 scope.launch {
-                    val ok = PilotShellClient.refocus(existing.taskId)
-                    PilotLog.d(this@PilotService, TAG, "refocus existing task=${existing.taskId} pkg=${app.pkg} ok=$ok")
+                    // 68 号修复：registry 里的 task 可能已死（用户关掉小窗 / 应用被杀），
+                    // 而 refocusTask 对死 task 会静默「成功」（setFocusedTask 找不到 task
+                    // 时静默返回），导致「小窗开过一次之后就再也打不开，只有全屏能打开」。
+                    if (!refocusOrReopen(app, existing)) launchPickedApp(app)
                 }
                 return
             }
         }
-        scope.launch {
-            val result = AppLauncher.launch(this@PilotService, app.pkg, mode)
-            Log.d(TAG, "launch ${app.label} mode=$mode -> $result")
-            PilotLog.d(this@PilotService, TAG, "launch ${app.pkg} mode=$mode -> $result")
-            val failed = result.startsWith("shell-exit") ||
-                result.startsWith("shell-error") ||
-                result.startsWith("intent-failed") ||
-                result.startsWith("shell-blocked")
-            // 41B：小窗启动成功 → 登记 registry + 显示底角把手
-            if (!failed && mode != Prefs.LAUNCH_FULL) {
-                registerFreeformTask(app)
-            }
-            if (failed) {
-                main.post {
-                    Toast.makeText(
-                        this@PilotService,
-                        "启动失败：${app.label}（特权服务未连接？）",
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                }
+        scope.launch { launchPickedApp(app) }
+    }
+
+    /**
+     * 68 号修复：refocus 一个已登记的 freeform task，失败 / 已死时清掉登记。
+     *
+     * 返回 true = 已成功 refocus（不必重开）；false = task 已死或 refocus 失败，
+     * 已清掉登记，调用方应走 [launchPickedApp] 重新启动。
+     */
+    private suspend fun refocusOrReopen(
+        app: PilotApp,
+        existing: FreeformWindowRegistry.Entry,
+    ): Boolean {
+        if (!taskStillAlive(app.pkg, existing.taskId)) {
+            PilotLog.d(
+                this, TAG,
+                "refocus skip: task=${existing.taskId} pkg=${app.pkg} already gone, reopen",
+            )
+            FreeformWindowRegistry.remove(existing.taskId)
+            return false
+        }
+        val ok = PilotShellClient.refocus(existing.taskId)
+        PilotLog.d(this, TAG, "refocus existing task=${existing.taskId} pkg=${app.pkg} ok=$ok")
+        if (!ok) FreeformWindowRegistry.remove(existing.taskId)
+        return ok
+    }
+
+    /** 该 pkg 的现存 task 里还能查到登记的 taskId 就算还活着；读不到任务表时保守按「还活着」走 refocus */
+    private suspend fun taskStillAlive(pkg: String, taskId: Int): Boolean {
+        val dump = TaskBinderBridge.dumpTasks(this)
+            ?: AppLauncher.shellStdout("dumpsys activity activities", 5_000L)
+            ?: return true
+        val id = taskId.toString()
+        return WindowStateParser.tasks(dump, pkg).any { it.id == id }
+    }
+
+    /** 统一的「从轮盘启动应用」：启动 → 登记 registry → 失败提示 */
+    private suspend fun launchPickedApp(app: PilotApp) {
+        val mode = Prefs.launchMode(this)
+        val result = AppLauncher.launch(this, app.pkg, mode)
+        Log.d(TAG, "launch ${app.label} mode=$mode -> $result")
+        PilotLog.d(this, TAG, "launch ${app.pkg} mode=$mode -> $result")
+        val failed = result.startsWith("shell-exit") ||
+            result.startsWith("shell-error") ||
+            result.startsWith("intent-failed") ||
+            result.startsWith("shell-blocked")
+        // 41B：小窗启动成功 → 登记 registry + 显示底角把手
+        if (!failed && mode != Prefs.LAUNCH_FULL) {
+            registerFreeformTask(app)
+        }
+        if (failed) {
+            main.post {
+                Toast.makeText(
+                    this,
+                    "启动失败：${app.label}（特权服务未连接？）",
+                    Toast.LENGTH_SHORT,
+                ).show()
             }
         }
     }
