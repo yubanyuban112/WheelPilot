@@ -731,6 +731,12 @@ class RawHotspotController(
 
     private fun handleMotionEvent(action: Int, x: Float, y: Float, eventTime: Long) {
         if (!available || !usingMonitor) return
+        // 75 号（需求 3）：真机走的是 monitorInput 这条通道 —— 原来只有 evdev 的
+        // handleRawTouch 会判「小窗外侧点击」，所以真机上点外面永远关不掉小窗。
+        // 这里补同一份判定，且**不 return**：判完照旧 route()，热区手势不受影响。
+        if (action and 0xff == ACTION_DOWN) {
+            service.onBypassDown(HotspotHitRules.ScreenPoint(x, y))
+        }
         route(action, x, y, eventTime)
     }
 
@@ -819,6 +825,11 @@ class RawHotspotController(
         ) {
             main.post { onOutsideClick() }
             return
+        }
+        // 75 号（需求 3）：evdev 通道同样要判「点在小窗外面 → 关掉它」。
+        // 与上面轮盘那条独立：轮盘是自绘 overlay，小窗是别的应用的 task。
+        if (action == ACTION_DOWN) {
+            service.onBypassDown(HotspotHitRules.ScreenPoint(p.x, p.y))
         }
         route(action, p.x, p.y, SystemClock.uptimeMillis())
     }

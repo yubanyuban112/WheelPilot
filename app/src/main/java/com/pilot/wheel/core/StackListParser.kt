@@ -25,6 +25,14 @@ object StackListParser {
         val mode: String?,
         val userId: Int?,
         val visible: Boolean? = null,
+        /**
+         * 75 号：Task 块里的 `mBounds=Rect(l, t - r, b)`。
+         *
+         * MagicOS 的私有轻窗层（102）转窗后**不听我们传入的 launchBounds**，会给它自己
+         * 的一套尺寸（实测 `Rect(133, 580 - 1406, 2655)`）。registry 里记的若还是我们算的
+         * 那组，「点小窗外侧关闭」就会把窗内点击判成外侧 —— 所以真实矩形必须能从 dump 读回来。
+         */
+        val bounds: WindowRect? = null,
     )
 
     private val TASK_LINE = Regex("^\\s*\\*\\s*(?:Root)?Task")
@@ -34,6 +42,8 @@ object StackListParser {
     private val MODE = Regex("(?:mWindowingMode|windowingMode|mode)=([\\w-]+)")
     private val USER = Regex("(?:userId|U)=(\\d+)")
     private val VISIBLE = Regex("visible=(true|false)")
+    // `mBounds=Rect(133, 580 - 1406, 2655)`：注意中间是「空格 减号 空格」，不是逗号
+    private val BOUNDS = Regex("mBounds=Rect\\((-?\\d+),\\s*(-?\\d+)\\s*-\\s*(-?\\d+),\\s*(-?\\d+)\\)")
 
     /** 包名整词匹配，避免 com.tencent.mm 命中 com.tencent.mmp */
     private fun pkgRegex(pkg: String): Regex = WindowStateParser.pkgMatcher(pkg)
@@ -78,6 +88,12 @@ object StackListParser {
     fun findTaskId(stdout: String, pkg: String): String? =
         findTask(stdout, pkg)?.taskId
 
+    /** 75 号：按 taskId 取窗口真实矩形（多窗口时只认这一扇，不看包名） */
+    fun boundsOf(stdout: String, taskId: String): WindowRect? =
+        taskBlocks(stdout).mapNotNull { parse(it) }
+            .firstOrNull { it.taskId == taskId }
+            ?.bounds
+
     private fun parse(block: String): TaskEntry? {
         val first = block.lineSequence().firstOrNull { it.isNotBlank() } ?: return null
         val id = TASK_ID_EQ.find(first)?.groupValues?.get(1)
@@ -88,7 +104,12 @@ object StackListParser {
         val userId = USER.find(first)?.groupValues?.get(1)?.toIntOrNull()
         val visible = VISIBLE.find(first)?.groupValues?.get(1)?.let { it == "true" }
             ?: VISIBLE.find(block)?.groupValues?.get(1)?.let { it == "true" }
-        return TaskEntry(id, mode, userId, visible)
+        // mBounds 只从 Task 块里取：configuration 行也有 mBounds，但那是 app 侧的，不是窗口的
+        val bounds = BOUNDS.find(block)?.let { m ->
+            val (l, t, r, b) = m.destructured
+            WindowRect(l.toInt(), t.toInt(), r.toInt(), b.toInt())
+        }?.takeIf { it.width > 0 && it.height > 0 }
+        return TaskEntry(id, mode, userId, visible, bounds)
     }
 
     /**

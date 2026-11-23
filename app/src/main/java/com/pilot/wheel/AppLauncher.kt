@@ -116,6 +116,13 @@ object AppLauncher {
         }
 
         if (!isFull) {
+            // 75 号：**已存在的 task 优先原地转窗**。
+            // 冷启动链路（oneStep / ActivityOptions / am start 5|100）对已存在的 task
+            // 全部无效 —— windowingMode 会被系统静默忽略，落成全屏。需求 1「第二次起
+            // 都变全屏」与需求 2「朋友圈里把微信缩成小窗」都是这一个根因。
+            promoteExistingTask(context, pkg, mode)?.let {
+                return it
+            }
             // 启动成功即推一条实况（B1）：「小窗运行中 · 应用名」
             tryHonorOneStep(context, pkg, mode, component, honor)?.let {
                 return it
@@ -133,10 +140,65 @@ object AppLauncher {
         }
 
         // 兜底 2：普通全屏
-        return runCatching {
+        val fallback = runCatching {
             context.startActivity(intent)
             "intent-full-fallback"
-        }.getOrElse { "intent-failed:${it.message}" }
+        }.getOrElse { return "intent-failed:${it.message}" }
+
+        // 75 号（需求 1）：冷启动时 task 还不存在，任何 windowingMode 参数都会被系统
+        // 丢弃 —— 只能先铺开、等 task 出现后再原地转窗。上面 promoteExistingTask 在
+        // 「已存在」时已经拦住了；这里补「刚铺开」的那一次，于是**第一次打开也是小窗**，
+        // 而不是「第一次小窗、以后全屏」。
+        if (!isFull) {
+            for (wait in longArrayOf(120L, 200L, 300L, 400L)) {
+                delay(wait)
+                promoteExistingTask(context, pkg, mode)?.let { return it }
+            }
+        }
+        return fallback
+    }
+
+    /**
+     * 75 号：把**已经在跑的 task** 原地转成浮动小窗。
+     *
+     * 为什么单独一条路：`am start --windowingMode 5|100` 只在 task **不存在**（冷启动）
+     * 时被消费；task 已经存在时系统直接把 Intent 投给现有实例，windowingMode 被忽略，
+     * 结果就是「第一次小窗、以后都全屏」。荣耀 MagicOS 上唯一还能被消费的是私有层
+     * 102（`WindowModes.MAGIC`），且它**只对已存在的 task 生效** —— 与 5/100 正好互补。
+     *
+     * 实测（荣耀 ASUJ6R6415001222 / Android 17）：对前台或后台的既有 task 执行
+     * `am start -n <cmp> -f 0x10200000 --windowingMode 102`，同一个 taskId 变
+     * `mode=freeform` 并前移到栈顶，底下的页面（朋友圈、上一个应用）仍在。
+     *
+     * 成功返回 `"promote-$verdict"`；目标包当前没有 task（真冷启动）返回 null，
+     * 由调用方走原有冷启动链。
+     */
+    private suspend fun promoteExistingTask(context: Context, pkg: String, mode: String): String? {
+        if (!PilotShellClient.possible()) return null
+        val component = context.packageManager.getLaunchIntentForPackage(pkg)?.component
+            ?: return null
+        // 冷启动时这里查不到 task（一次 dumpsys 的成本，换来「热启动永远小窗」）。
+        // 刻意**不用** awaitTask 的轮询：那条要等 9 轮、每次 dumpsys，冷启动会白等
+        // 两秒多才落回原链。这里只要一次即时快照 —— 有就是热启动，没有就是冷启动。
+        val entry = quickTask(context, pkg) ?: return null
+        if (WindowStateParser.isFreeform(entry.mode)) {
+            // 已经是小窗：只把它拉回前台，不重投 Intent（否则会重置用户翻到的页面）
+            log(context, "promote $pkg task=${entry.taskId} already freeform, refocus")
+            TaskBinderBridge.refocus(context, entry.taskId)
+            return "promote-already"
+        }
+        val bounds = freeformBounds(context, FreeformWindowRegistry.list().size)
+        lastLaunchBounds = bounds
+        // 后台 task 转窗前先放开可调整，否则后续 resize 对它无效
+        WindowBoundsApplier.markResizeable(entry.taskId)
+        val result = execShell(component.flattenToShortString(), WindowModes.MAGIC)
+        log(context, "promote $pkg task=${entry.taskId} mode=${entry.mode} mode=$mode -> $result")
+        if (result != "shell-ok") return null
+        // 102 转窗后系统给的是它自己的尺寸，必须显式拉到我们的 bounds，
+        // 否则 registry 里记的矩形与真实窗口不符，「点外面关闭」会判错内外。
+        if (bounds != null) applyBounds(context, pkg, entry.taskId, bounds)
+        val verdict = if (bounds == null) "ok" else confirmWindow(context, pkg, bounds)
+        return "promote-$verdict"
     }
 
     /**
@@ -185,6 +247,7 @@ object AppLauncher {
                     when (detail.verdict) {
                         ForegroundCheck.ShellVerify.OK -> {
                             log(context, "honor oneStep verify ok via shell: $pkg ${detail.describe()}")
+                            alignBounds(context, pkg)
                             return "honor-onestep"
                         }
                         ForegroundCheck.ShellVerify.FAILED -> {
@@ -214,6 +277,7 @@ object AppLauncher {
                 val fg = ForegroundCheck.currentForeground(context, 6000L)
                 if (fg == pkg) {
                     log(context, "honor oneStep verify ok: $pkg foreground")
+                    alignBounds(context, pkg)
                     return "honor-onestep"
                 }
                 log(context, "honor oneStep verify miss: foreground=$fg")
@@ -223,6 +287,32 @@ object AppLauncher {
         }
         log(context, "honor oneStep unavailable, falling back to bundle candidates")
         return null
+    }
+
+    /**
+     * 75 号：把刚拉起的小窗拉到我们的几何，并把**真实矩形**记进 [lastLaunchBounds]。
+     *
+     * 荣耀 oneStep 走的是系统私有接口，它自己决定窗口多大（实测 102 层恒为
+     * `Rect(133, 580 - 1406, 2655)`），既不听我们传的 launchBounds，也不回报尺寸。
+     * 于是 registry 里若记的是我们算的那组，「点小窗外侧关闭」就会判错内外。
+     * 这里统一收拾：先拉到目标矩形，再回读 dump 里的 `mBounds` 作为登记值。
+     */
+    private suspend fun alignBounds(context: Context, pkg: String) {
+        val entry = awaitTask(context, pkg) ?: return
+        val target = lastLaunchBounds
+            ?: freeformBounds(context, FreeformWindowRegistry.list().size)
+            ?: return
+        WindowBoundsApplier.markResizeable(entry.taskId)
+        applyBounds(context, pkg, entry.taskId, target)
+        log(context, "align bounds task=${entry.taskId} target=$target")
+        // 回读真实矩形：resize 可能被系统钳制（MagicOS 对最小宽度有自己的下限）
+        val dump = TaskBinderBridge.dumpTasks(context)
+            ?: exec("dumpsys activity activities", 4_000L)?.stdout
+        val real = dump?.let { StackListParser.boundsOf(it, entry.taskId) }
+        if (real != null && real.width > 0 && real.height > 0) {
+            lastLaunchBounds = real
+            log(context, "align bounds task=${entry.taskId} real=$real")
+        }
     }
 
     /**
@@ -336,6 +426,19 @@ object AppLauncher {
         execRaw("am task resizeable ${entry.taskId} 2")
         applyBounds(context, pkg, entry.taskId, bounds)
         return if (entry.mode == null) "unknown-mode" else "resized-from-fullscreen"
+    }
+
+    /**
+     * 75 号：**一次**快照查 task，不轮询。
+     *
+     * [awaitTask] 是给「刚发完启动命令、等窗口起来」用的，要轮询 9 次；转窗判定只要
+     * 「此刻是否存在」这一个事实，用轮询会让冷启动白等两秒多，必须分开。
+     */
+    private suspend fun quickTask(context: Context, pkg: String): StackListParser.TaskEntry? {
+        val dump = TaskBinderBridge.dumpTasks(context)
+            ?: exec("dumpsys activity activities", 5_000L)?.stdout
+            ?: return null
+        return StackListParser.findTask(dump, pkg, currentUserId())
     }
 
     /**

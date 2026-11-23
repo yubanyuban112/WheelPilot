@@ -30,6 +30,8 @@ object Prefs {
     /** 震动强度档位：0=轻 1=中(默认) 2=强 */
     private const val KEY_HAPTIC_STRENGTH = "haptic_strength"
     private const val KEY_DISMISS = "dismiss_outside"
+    /** 75 号：点小窗外侧 → 直接关掉小窗（即用即走） */
+    private const val KEY_CLOSE_OUTSIDE = "close_outside"
     private const val KEY_ANGLE = "corner_angle"
     private const val KEY_HOT_W = "hot_w"
     private const val KEY_HOT_H = "hot_h"
@@ -285,6 +287,25 @@ object Prefs {
     fun dismissOutside(context: Context): Boolean = sp(context).getBoolean(KEY_DISMISS, true)
     fun setDismissOutside(context: Context, value: Boolean) {
         sp(context).edit().putBoolean(KEY_DISMISS, value).apply()
+    }
+
+    /**
+     * 75 号：点在小窗矩形之外 → 直接关闭这个小窗（「即用即走」）。
+     *
+     * 与 [dismissOutside] 不同：那条只管轮盘 overlay（点空白处收起轮盘），
+     * 小窗本身是别的应用的 task，系统不会替你关。默认关闭，避免误触把用户
+     * 正在看的窗口吞掉。
+     */
+    /**
+     * 75 号（需求 3）：点在小窗外面就关掉小窗（「即用即走」）。
+     *
+     * **默认开** —— 这是用户明确要的行为，不是可选项；留一个开关是为了让人能关掉。
+     */
+    fun closeOnOutside(context: Context): Boolean =
+        sp(context).getBoolean(KEY_CLOSE_OUTSIDE, true)
+
+    fun setCloseOnOutside(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_CLOSE_OUTSIDE, value).apply()
     }
 
     /** 轮盘张角，度数。图标沿这个弧度排开 */

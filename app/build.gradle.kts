@@ -44,8 +44,9 @@ android {
         minSdk = 30
         // targetSdk 保持 35，避免 Android 17 的新运行时行为影响特权服务
         targetSdk = 35
-        versionCode = 137
-        versionName = "3.24.28"
+        // 75 号：真机在装的是 140/3.24.31（调试期产物），必须大于它才能覆盖安装
+        versionCode = 149
+        versionName = "3.24.40"
 
         // 瘦身：真机只需 arm 两种 ABI，去掉 x86 / x86_64 模拟器的 so
         ndk {

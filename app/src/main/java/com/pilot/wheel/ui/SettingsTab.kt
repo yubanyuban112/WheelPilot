@@ -153,6 +153,7 @@ internal fun SettingsScreen(
     var hapticStrength by remember { mutableStateOf(Prefs.hapticStrength(context)) }
     var wheelHint by remember { mutableStateOf(Prefs.showWheelHint(context)) }
     var dismiss by remember { mutableStateOf(Prefs.dismissOutside(context)) }
+    var closeOutside by remember { mutableStateOf(Prefs.closeOnOutside(context)) }
     var launchMode by remember { mutableStateOf(Prefs.launchMode(context)) }
     var pauseLandscape by remember { mutableStateOf(Prefs.pauseLandscape(context)) }
     var pauseGame by remember { mutableStateOf(Prefs.pauseGame(context)) }
@@ -331,6 +332,7 @@ internal fun SettingsScreen(
                     hapticStrength = Prefs.hapticStrength(context)
                     wheelHint = Prefs.showWheelHint(context)
                     dismiss = Prefs.dismissOutside(context)
+                    closeOutside = Prefs.closeOnOutside(context)
                     launchMode = Prefs.launchMode(context)
                     pauseLandscape = Prefs.pauseLandscape(context)
                     pauseGame = Prefs.pauseGame(context)
@@ -538,6 +540,16 @@ internal fun SettingsScreen(
                             SwitchRow("点击外部关闭", "点空白区域收起轮盘", dismiss) {
                                 dismiss = it
                                 Prefs.setDismissOutside(context, it)
+                            }
+                        }
+                        scope.item {
+                            SwitchRow(
+                                "点窗外即关小窗",
+                                "点在小窗外面就把小窗关掉，即用即走",
+                                closeOutside,
+                            ) {
+                                closeOutside = it
+                                Prefs.setCloseOnOutside(context, it)
                             }
                         }
                     }

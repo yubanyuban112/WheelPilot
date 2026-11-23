@@ -289,6 +289,14 @@ class PilotService : AccessibilityService() {
         if (SmartLinkFeature.isEnabled(this)) {
             SmartLinkCoordinator.onAccessibilityEvent(this, e)
         }
+        // 75 号（需求 3）：焦点离开小窗 = 用户点到了小窗外面。
+        // 真机拿不到点击坐标（旁路读 evdev，a11y motion 也收不到注入事件），
+        // 但「焦点换了主人」这事实在每条通道上都成立，用它当判据最稳。
+        if (e.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            runCatching {
+                windows.firstOrNull { it.isFocused }?.root?.packageName?.toString()
+            }.getOrNull().let { maybeCloseOnFocusLeft(it) }
+        }
         when (e.eventType) {
             // 触摸事件没有目标包名，喂给场景暂停会把 pkg 判成 null，必须单独处理
             AccessibilityEvent.TYPE_TOUCH_INTERACTION_START -> {
@@ -336,6 +344,24 @@ class PilotService : AccessibilityService() {
         // 这一行写在所有前置判断之前，正是为了不被层互斥或开关提前挡掉。
         val nowA11y = SystemClock.elapsedRealtime()
         TouchStats.a11yMotionAt = nowA11y
+        // 75 号（需求 3）：**外侧点击判定放在所有 return 之前**。
+        //
+        // 理由：真机旁路跑 getevent，读的是 /dev/input 硬件节点 —— 只有真实手指才会出现
+        // 在那里。无障碍的 motion 事件来自输入分发链路，无论手指还是注入都能收到，是
+        // 唯一「一定看得见这一下点击」的通道。原来只在 handleA11yMotion 里判（那是旁路
+        // 降级时才走的支路），于是 getevent 正常时点外面根本没人接。
+        //
+        // 两个通道可能同时看见同一次 DOWN：onBypassDown 内部有 800ms 去重与「窗内不动作」
+        // 的早退，先关掉的那个之后自然返回 false，重复调用是安全的。
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            // 诊断：证明「无障碍到底看没看见这一下」——注入点击与真手指在这里都可见，
+            // 而 getevent 只看得到真手指。两条通道的覆盖率差异全靠这行日志判断。
+            PilotShellClient.trace(
+                "A11Y_DOWN",
+                "x=${event.rawX.toInt()} y=${event.rawY.toInt()} layer=${TouchLayerState.current}",
+            )
+            onBypassDown(com.pilot.wheel.core.HotspotHitRules.ScreenPoint(event.rawX, event.rawY))
+        }
         if (!Prefs.rawHotspotEnabled(this)) return
         // 维度5：降级开关——关闭后本兜底层完全静默，触摸感知退回纯 Shizuku 旁路，
         // 无障碍服务只保留窗口类型持有与必要节点读取，不再介入任何触摸事件流。
@@ -383,6 +409,12 @@ class PilotService : AccessibilityService() {
         val arb = a11yArbiter ?: buildA11yArbiter()
         val x = event.rawX
         val y = event.rawY
+        // 75 号（需求 3）：无障碍兜底通道也要判「小窗外侧点击」。
+        // 主判定已提到 onMotionEvent 开头（那条路所有情况都能看见），这里保留一份是为了
+        // 覆盖「a11y 直接调 handleA11yMotion」的旧路径，重复调用由 onBypassDown 内部去重。
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            onBypassDown(com.pilot.wheel.core.HotspotHitRules.ScreenPoint(x, y))
+        }
         // 维度4：量化核心判定耗时；仅 verbose 日志开启且 >5ms 时打印，不刷屏。
         // 真机验证「onMotionEvent 不成为输入延迟瓶颈」直接看这条日志是否出现。
         val t0 = if (Prefs.verboseLog(this)) System.nanoTime() else 0L
@@ -1240,6 +1272,125 @@ class PilotService : AccessibilityService() {
     /** 旁路控制器用：当前小窗矩形（屏幕坐标）；未拆分独立小窗时返回 null */
     fun currentWheelRect(): com.pilot.wheel.core.WindowRect? = null
 
+    /**
+     * 75 号（需求 3「即用即走」）：旁路通道上报一次按下点，若落在**已登记小窗的
+     * 矩形之外**且开关打开，就关掉那个小窗。
+     *
+     * 为什么自己实现：实测（荣耀 Android 17）点在小窗外的空白处，系统只是把焦点
+     * 交给下面的应用，小窗仍留在屏幕上 —— 不会自动收起。
+     *
+     * 三条安全边界：
+     *  - 开关 [Prefs.closeOnOutside] 默认关，避免把用户正在看的小窗误吞；
+     *  - 只在 ACTION_DOWN 判一次，且**不消费**这次输入（穿透照旧），
+     *    下面的应用该响应还是响应；
+     *  - 同一时刻只关一次（[OUTSIDE_CLOSE_GAP_MS]），防多通道重复上报。
+     *
+     * @return true 表示这次按下已经关掉了小窗
+     */
+    fun onBypassDown(p: com.pilot.wheel.core.HotspotHitRules.ScreenPoint): Boolean {
+        if (!Prefs.closeOnOutside(this)) return false
+        // 轮盘正开着时不关：这会儿用户在挑选下一个应用，点到轮盘图标本来就落在
+        // 小窗矩形之外，先关掉再开会让「换个应用」变成「关一个开一个」的错觉。
+        // 收起轮盘后（hideWheel）再点外面才关。
+        if (isWheelShown()) return false
+        val entry = FreeformWindowRegistry.list().firstOrNull() ?: return false
+        // 75 号：窗口可能被用户拖动/缩放过，registry 里那份会过期。这里不在点击路径上等
+        // dumpsys（会卡住手势），只用当下这份；同时后台补一次真实矩形，下一次点击就准了。
+        refreshBoundsAsync(entry.taskId)
+        if (!com.pilot.wheel.core.HotspotHitRules.outsideRect(p, entry.bounds)) return false
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastOutsideCloseAt < OUTSIDE_CLOSE_GAP_MS) return false
+        lastOutsideCloseAt = now
+        PilotLog.d(
+            this,
+            TAG,
+            "close-on-outside task=${entry.taskId} pkg=${entry.pkg} at=(${p.x},${p.y})",
+        )
+        closeFreeformTask(entry)
+        return true
+    }
+
+    /**
+     * 75 号（需求 3「即用即走」）主判：焦点离开小窗 → 关掉小窗。
+     *
+     * 为什么不用点击坐标：实测「荣耀 Android 17」三条坐标通道全断 ——
+     *  - getevent 读 /dev/input/event8，`adb shell input tap` 是注入事件不写节点；
+     *  - monitorInput 被 `SecurityException: Requires MONITOR_INPUT permission` 拒绝；
+     *  - 无障碍 onMotionEvent 在 getevent 正常时整段不生效，注入点击也收不到。
+     * 手指点击虽然会进 getevent，但一旦旁路线程重启就有窗口期，
+     * 而且「点在小窗内部」和「点在外面」都要等坐标，延迟更明显。
+     *
+     * 焦点判据只要三件事：无障碍开了、小窗登记过、焦点包变了。
+     * 边界：轮盘开着时不关（用户在挑应用）、刚转窗的前 [FOCUS_GRACE_MS] 不判
+     * （转窗瞬间焦点会抖一下）、同一个小窗只关一次。
+     */
+    private fun maybeCloseOnFocusLeft(focusedPkg: String?) {
+        if (!Prefs.closeOnOutside(this)) return
+        if (isWheelShown()) return
+        val entry = FreeformWindowRegistry.list().firstOrNull() ?: return
+        // 焦点还在小窗自己身上（或拿不到焦点信息）→ 不动
+        if (focusedPkg == null || focusedPkg == entry.pkg) return
+        val now = SystemClock.elapsedRealtime()
+        // 转窗刚完成时焦点会短暂落在别处，给一段冷静期
+        if (now - registryTouchedAt < FOCUS_GRACE_MS) return
+        if (now - lastOutsideCloseAt < OUTSIDE_CLOSE_GAP_MS) return
+        lastOutsideCloseAt = now
+        PilotShellClient.trace("CLOSE_FOCUS_LEFT", "task=${entry.taskId} pkg=${entry.pkg} focused=$focusedPkg")
+        PilotLog.d(this, TAG, "close-on-focus-left task=${entry.taskId} pkg=${entry.pkg} focused=$focusedPkg")
+        closeFreeformTask(entry)
+    }
+
+    /**
+     * 关掉一个小窗。
+     *
+     * 先走 `am stack remove`（真机能彻底移除 task，实测有效），失败退回 binder。
+     * 注意 `am stack remove` 只对**可见**的 task 有效，不可见的残留会静默失败，
+     * 所以这里不看返回值，成功后统一从 registry 摘掉并尝试下一层。
+     */
+    /**
+     * 75 号：把 registry 里的 bounds 与窗口的真实矩形对齐。
+     *
+     * 用户拖动 / 双击标题栏 / 系统自己改尺寸之后，registry 那份就过期了；用它判
+     * 「点外面」会在窗内也判成外侧，把人正在用的小窗关掉。这里读一次 dump 校准。
+     */
+    private fun refreshBoundsAsync(taskId: Int) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastBoundsRefreshAt < BOUNDS_REFRESH_GAP_MS) return
+        lastBoundsRefreshAt = now
+        scope.launch {
+            val dump = runCatching { TaskBinderBridge.dumpTasks(this@PilotService) }
+                .getOrNull()
+                ?: runCatching {
+                    AppLauncher.exec("dumpsys activity activities", 4_000L)?.stdout
+                }.getOrNull()
+                ?: return@launch
+            val real = com.pilot.wheel.core.StackListParser.boundsOf(dump, taskId.toString())
+            if (real != null && real.width > 0 && real.height > 0) {
+                FreeformWindowRegistry.updateBounds(taskId, real)
+                PilotLog.d(this@PilotService, TAG, "bounds refreshed task=$taskId -> $real")
+            }
+        }
+    }
+
+    private fun closeFreeformTask(entry: FreeformWindowRegistry.Entry) {
+        FreeformWindowRegistry.remove(entry.taskId)
+        scope.launch {
+            val removed = runCatching {
+                AppLauncher.runShellCommand("am stack remove ${entry.taskId}")
+            }.getOrDefault(false)
+            if (!removed) {
+                TaskBinderBridge.removeTask(this@PilotService, entry.taskId.toString())
+            }
+            PilotLog.d(this@PilotService, TAG, "close-on-outside task=${entry.taskId} ok=$removed")
+        }
+    }
+
+    @Volatile private var lastOutsideCloseAt = 0L
+    @Volatile private var lastBoundsRefreshAt = 0L
+
+    /** 75 号：最近一次登记/转窗的时刻，用于「焦点离开就关」的冷静期 */
+    @Volatile private var registryTouchedAt = 0L
+
     /** 「更多」面板：轮盘与竖列菜单共用同一个入口 */
     private fun openMorePanel() {
         hideWheel()
@@ -1602,7 +1753,10 @@ class PilotService : AccessibilityService() {
     private suspend fun registerFreeformTask(app: PilotApp) {
         val entry = AppLauncher.awaitTask(this, app.pkg) ?: return
         val taskId = entry.taskId.toIntOrNull() ?: return
-        val bounds = AppLauncher.lastLaunchBounds ?: run {
+        // 75 号：**真实矩形优先**。MagicOS 的 102 转窗层不听 launchBounds，会给自己的尺寸；
+        // 只有 dump 里读回来的 `mBounds` 才是屏幕上那扇窗的范围。registry 记错的后果是
+        // 「点小窗外侧关闭」把窗内点击当成外侧 —— 用户第一次点小窗内部就被关掉。
+        val bounds = entry.bounds ?: AppLauncher.lastLaunchBounds ?: run {
             val dm = resources.displayMetrics
             com.pilot.wheel.core.FreeformLayout.nextBounds(
                 dm.widthPixels,
@@ -1618,6 +1772,9 @@ class PilotService : AccessibilityService() {
             android.graphics.drawable.BitmapDrawable(resources, it)
         }
         FreeformWindowRegistry.record(taskId, app.pkg, bounds, icon)
+        // 75 号：记下登记/转窗时刻，给「焦点离开就关」一段冷静期 ——
+        // 转窗完成后焦点会短暂在别处，没有这段会把刚开的小窗当场关掉。
+        registryTouchedAt = SystemClock.elapsedRealtime()
         PilotLog.d(this, TAG, "freeform registered task=$taskId pkg=${app.pkg} bounds=$bounds")
     }
 
@@ -1730,6 +1887,18 @@ class PilotService : AccessibilityService() {
          * 旁路重启通常在 100ms 内完成，接管窗口只需覆盖一次完整手势即可，取 1.5s 富余。
          */
         private const val A11Y_TAKEOVER_MS = 1_500L
+
+        /** 75 号：点小窗外侧的关窗冷却，防多通道重复上报 */
+        private const val OUTSIDE_CLOSE_GAP_MS = 800L
+        // 75 号：真矩形校准的最小间隔。太频繁会把 dumpsys 打成瓶颈，太稀会拿旧矩形判内外
+        private const val BOUNDS_REFRESH_GAP_MS = 1_500L
+
+        /**
+         * 75 号：「焦点离开小窗就关」的冷静期（ms）。
+         * 转窗/前移的瞬间焦点会在小窗和底下的应用之间抖一下，没有这段就会
+         * 把刚打开的小窗当场关掉。真人从看到小窗到点别处远超过 1.5 秒。
+         */
+        private const val FOCUS_GRACE_MS = 1_500L
 
         @Volatile
         var instance: PilotService? = null
